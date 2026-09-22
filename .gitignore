@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+build/
+dist/
+*.spec.bak
+.venv/
+venv/
+
+# Created beside the exe at runtime -- user content, not source
+media/
+presets/

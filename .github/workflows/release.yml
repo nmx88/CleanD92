@@ -1,0 +1,63 @@
+name: Build and release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:          # lets you build a test exe without tagging
+
+permissions:
+  contents: write             # needed to attach the exe to a release
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-build.txt
+
+      - name: Build
+        run: pyinstaller --noconfirm --clean CleaneD92.spec
+
+      - name: Smoke test
+        # The exe cannot be launched here -- there is no panel plugged into a
+        # CI runner -- so just prove it was produced and is a sane size.
+        shell: pwsh
+        run: |
+          $exe = "dist/CleaneD92.exe"
+          if (-not (Test-Path $exe)) { throw "CleaneD92.exe was not produced" }
+          $mb = [math]::Round((Get-Item $exe).Length / 1MB, 1)
+          Write-Host "Built CleaneD92.exe ($mb MB)"
+          if ($mb -lt 8)  { throw "exe is suspiciously small ($mb MB)" }
+          if ($mb -gt 120) { throw "exe is suspiciously large ($mb MB)" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CleaneD92
+          path: dist/CleaneD92.exe
+          if-no-files-found: error
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/CleaneD92.exe
+          generate_release_notes: true
+          body: |
+            Single portable executable. Nothing to install, no driver, no
+            administrator rights.
+
+            Drop it anywhere and run it; it creates `media/` and `presets/`
+            beside itself on first launch.
+
+            If you are coming here from a `0x9F DRIVER_POWER_STATE_FAILURE`
+            boot loop, read **Removing the vendor driver** in the README
+            before using this.

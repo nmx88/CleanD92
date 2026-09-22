@@ -1,0 +1,4 @@
+# Runtime dependencies. tkinter is part of the standard library on Windows.
+hidapi>=0.14
+pillow>=10.0
+psutil>=5.9
