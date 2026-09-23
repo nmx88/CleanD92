@@ -475,16 +475,30 @@ def render_weather(draw, item, weather, width, height, short, fitted,
         days = (weather.get("daily") or [])[:count]
         if not days:
             return None
-        # Tighter packing for few days; shrink glyphs when squeezing a week.
-        gap = short * (0.008 if count <= 3 else 0.004)
-        usable = max(40.0, span - gap * max(0, count - 1))
-        col_w = usable / count
-        shrink = 1.0 if count <= 3 else (0.85 if count <= 5 else 0.7)
-        glyph_r = max(5, min(col_w * 0.28, item["size"] * short * 0.28) * shrink)
+        # Pack columns to content size instead of stretching across the whole
+        # item width -- a 2-day strip used to pin Wed left and Thu right with
+        # a huge empty middle. 6-7 days still fill the span so a week fits.
+        shrink = 1.0 if count <= 3 else (0.9 if count <= 5 else 0.7)
+        natural = max(short * 0.13, item["size"] * short * 1.05) * shrink
+        gap = short * (0.025 if count <= 5 else 0.008)
+        if count <= 5:
+            col_w = min(natural, span / count)
+            block = count * col_w + (count - 1) * gap
+            if item.get("align") == "center":
+                origin = left + max(0.0, (span - block) / 2.0)
+            elif item.get("align") == "right":
+                origin = left + max(0.0, span - block)
+            else:
+                origin = left
+        else:
+            usable = max(40.0, span - gap * max(0, count - 1))
+            col_w = usable / count
+            origin = left
+        glyph_r = max(5, min(col_w * 0.32, item["size"] * short * 0.28) * shrink)
         name_px = max(6, item["size"] * short * 0.32 * shrink)
         temp_px = max(7, item["size"] * short * 0.38 * shrink)
         for index, day in enumerate(days):
-            col_left = left + index * (col_w + gap)
+            col_left = origin + index * (col_w + gap)
             cx = col_left + col_w / 2.0
             name = day.get("name") or ""
             font = fitted(name, col_w * 0.95, name_px)
