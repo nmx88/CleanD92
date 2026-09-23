@@ -569,13 +569,21 @@ def render_worldclock(draw, item, info, width, height, short, fitted,
             clock_text = there.strftime("%H:%M")
             off_here = here.utcoffset() or timezone.utc.utcoffset(None)
             off_there = there.utcoffset() or timezone.utc.utcoffset(None)
-            hours = int(round((off_there - off_here).total_seconds() / 3600.0))
-            if hours > 0:
-                delta_text = "+%dh" % hours
-            elif hours < 0:
-                delta_text = "\u2212%dh" % abs(hours)  # Unicode minus
-            else:
+            # Keep half-hour / :45 zones honest (India +5.5, Nepal +5.75).
+            minutes = int(round(
+                (off_there - off_here).total_seconds() / 60.0))
+            if minutes == 0:
                 delta_text = "same"
+            else:
+                sign = "+" if minutes > 0 else "\u2212"
+                abs_m = abs(minutes)
+                hours, mins = divmod(abs_m, 60)
+                if mins == 0:
+                    delta_text = "%s%dh" % (sign, hours)
+                elif hours == 0:
+                    delta_text = "%s%dm" % (sign, mins)
+                else:
+                    delta_text = "%s%d:%02d" % (sign, hours, mins)
         except Exception:
             clock_text = info.get("error") or "no tz"
     elif info.get("error"):
