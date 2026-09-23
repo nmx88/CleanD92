@@ -863,11 +863,12 @@ class PanelApp:
     ORIENT_PRESETS = {
         ("horizontal", "vertical"): {
             "Wide dashboard": "Tall dashboard",
-            "Wide clock only": "Tall dashboard",
+            "Wide clock only": "Tall clock only",
             "Media with caption": "Tall dashboard",
         },
         ("vertical", "horizontal"): {
             "Tall dashboard": "Wide dashboard",
+            "Tall clock only": "Wide clock only",
         },
     }
 
@@ -973,9 +974,13 @@ class PanelApp:
             "\n"
             "Weather\n"
             "\n"
-            "\u2022 Add a Weather item, set Place (e.g. Galatsi) and country "
-            "bias GR. Format now / 3day / week. Data comes from Open-Meteo; "
-            "nothing is uploaded except the place name lookup.\n"
+            "\u2022 Add a Weather item, set Place (e.g. Galatsi) and optional "
+            "country bias (blank = anywhere). Horizon is Now or 1\u20137 days. "
+            "Language Greek/English picks place names and weekday labels. "
+            "A Place override on the item can show a second city (Now / 1 day). "
+            "World clock items show another city's time and the offset from "
+            "this PC. Data comes from Open-Meteo; nothing is uploaded except "
+            "the place name lookup.\n"
             "\n"
             "If the panel goes black\n"
             "\n"
@@ -1372,10 +1377,19 @@ def start_backend():
     # README promises both folders on first run; presets/ was only created
     # when the user saved one.
     os.makedirs(layout.preset_dir(core.HERE), exist_ok=True)
+    first_run = not os.path.isfile(core.SETTINGS_PATH)
     core.load_settings()
     panel = D92().open()
     with core.state_lock:
         brightness = core.state["brightness"]
+        if first_run:
+            # One-shot coaching until the render loop has something newer to
+            # say (empty media, wake, etc.). Settings.json appears when the
+            # user first edits a weather preference.
+            core.runtime["message"] = (
+                "first run -- Info screen is on the panel. Drop images onto "
+                "the preview or into media/ when you want them; Help has the "
+                "rest")
     panel.wake(brightness)
     threading.Thread(target=core.render_loop, args=(panel,),
                      daemon=True).start()

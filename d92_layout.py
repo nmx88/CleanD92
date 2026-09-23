@@ -169,6 +169,12 @@ DEFAULT_PRESETS = {
         new_item("clock", x=0.05, y=0.12, size=0.62, color="#ebf0fa"),
         new_item("date", x=0.06, y=0.78, size=0.14, color="#6e7d96"),
     ],
+    "Tall clock only": [
+        new_item("clock", x=0.08, y=0.18, size=0.42, color="#ebf0fa",
+                 format="%H:%M"),
+        new_item("date", x=0.08, y=0.32, size=0.14, color="#6e7d96",
+                 format="%d %b"),
+    ],
     "Media with caption": [
         new_item("clock", x=0.03, y=0.06, size=0.34, color="#ffffff"),
         new_item("filename", x=0.03, y=0.80, size=0.13, color="#ffffff",

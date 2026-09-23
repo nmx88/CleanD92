@@ -72,7 +72,15 @@ On first run you get:
 CleanD92.exe
 media/        put your .png .jpg .gif .bmp .webp files here
 presets/      your saved layouts, as .json
+settings.json weather place / language / units (created when you edit them)
 ```
+
+The panel opens on the **Info** screen (clock and system readouts) even with
+an empty `media/` folder. If the device is missing or held by the official
+MiraBox software, a **No panel found** window lists the usual causes and
+offers Retry. Pick **Vertical** under Orientation if the panel is mounted on
+its end — the matching tall preset loads automatically when you are still on
+a built-in layout.
 
 ### From source
 
