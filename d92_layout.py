@@ -279,16 +279,20 @@ def item_strings(item, values):
     return None, None
 
 
-def weather_glyph_kind(code):
-    """Map Open-Meteo WMO weather codes to a handful of drawable glyphs."""
+def weather_glyph_kind(code, is_day=True):
+    """Map Open-Meteo WMO weather codes to drawable glyphs.
+
+    `is_day` comes from current.is_day: clear / partly-clear at night become
+    moon rather than a misleading sun."""
     try:
         code = int(code)
     except (TypeError, ValueError):
         code = 0
+    day = bool(is_day)
     if code == 0:
-        return "sun"
+        return "sun" if day else "moon"
     if code in (1, 2):
-        return "part"       # mainly clear / partly cloudy
+        return "part" if day else "part_night"
     if code == 3:
         return "cloud"
     if code in (45, 48):
@@ -302,17 +306,35 @@ def weather_glyph_kind(code):
     return "cloud"
 
 
-def draw_weather_glyph(draw, cx, cy, radius, kind, colour):
+# Per-kind colours so rain is not the same ink as the temperature text.
+# Item `color` still paints the temp / place strings.
+GLYPH_COLOURS = {
+    "sun": (255, 196, 72),
+    "moon": (196, 210, 235),
+    "part": (255, 196, 72),
+    "part_night": (196, 210, 235),
+    "cloud": (160, 170, 185),
+    "rain": (80, 160, 230),
+    "snow": (210, 230, 255),
+    "fog": (150, 155, 165),
+    "storm": (180, 140, 255),
+}
+STORM_BOLT = (255, 220, 90)
+
+
+def draw_weather_glyph(draw, cx, cy, radius, kind, colour=None):
     """Filled vector icons sized for the strip -- no image assets in the exe."""
     r = max(5, int(radius))
     w = max(1, r // 6)
+    colour = colour or GLYPH_COLOURS.get(kind, (200, 200, 200))
 
-    def disc(x, y, rad, fill=True):
+    def disc(x, y, rad, fill=True, ink=None):
+        ink = ink or colour
         box = (x - rad, y - rad, x + rad, y + rad)
         if fill:
-            draw.ellipse(box, fill=colour, outline=colour)
+            draw.ellipse(box, fill=ink, outline=ink)
         else:
-            draw.ellipse(box, outline=colour, width=max(2, w))
+            draw.ellipse(box, outline=ink, width=max(2, w))
 
     if kind == "sun":
         disc(cx, cy, int(r * 0.55))
@@ -323,34 +345,37 @@ def draw_weather_glyph(draw, cx, cy, radius, kind, colour):
             x1 = cx + int(r * 1.05 * math.cos(rad))
             y1 = cy + int(r * 1.05 * math.sin(rad))
             draw.line((x0, y0, x1, y1), fill=colour, width=max(2, w))
-    elif kind == "part":
-        # Sun peeks from behind a small cloud.
-        disc(cx - int(r * 0.25), cy - int(r * 0.35), int(r * 0.4))
-        for angle in (200, 240, 280, 320):
-            rad = math.radians(angle)
-            x0 = cx - int(r * 0.25) + int(r * 0.5 * math.cos(rad))
-            y0 = cy - int(r * 0.35) + int(r * 0.5 * math.sin(rad))
-            x1 = cx - int(r * 0.25) + int(r * 0.75 * math.cos(rad))
-            y1 = cy - int(r * 0.35) + int(r * 0.75 * math.sin(rad))
-            draw.line((x0, y0, x1, y1), fill=colour, width=max(2, w))
-        disc(cx + int(r * 0.15), cy + int(r * 0.2), int(r * 0.5))
-        disc(cx - int(r * 0.25), cy + int(r * 0.25), int(r * 0.38))
-        disc(cx + int(r * 0.45), cy + int(r * 0.3), int(r * 0.32))
+    elif kind == "moon":
+        # Crescent: bright disc with a darker bite offset to the right.
+        disc(cx, cy, int(r * 0.7))
+        bite = (
+            cx - int(r * 0.15), cy - int(r * 0.7),
+            cx + int(r * 1.25), cy + int(r * 0.7),
+        )
+        # Punch with near-black so the moon reads as a crescent on the
+        # dark panel background without needing the true canvas colour.
+        draw.ellipse(bite, fill=(8, 10, 14), outline=(8, 10, 14))
+    elif kind in ("part", "part_night"):
+        body = "sun" if kind == "part" else "moon"
+        draw_weather_glyph(draw, cx - int(r * 0.25), cy - int(r * 0.35),
+                           int(r * 0.55), body)
+        cloud = GLYPH_COLOURS["cloud"]
+        disc(cx + int(r * 0.15), cy + int(r * 0.2), int(r * 0.5), ink=cloud)
+        disc(cx - int(r * 0.25), cy + int(r * 0.25), int(r * 0.38), ink=cloud)
+        disc(cx + int(r * 0.45), cy + int(r * 0.3), int(r * 0.32), ink=cloud)
     elif kind == "cloud":
         disc(cx, cy + int(r * 0.15), int(r * 0.55))
         disc(cx - int(r * 0.45), cy + int(r * 0.2), int(r * 0.4))
         disc(cx + int(r * 0.45), cy + int(r * 0.25), int(r * 0.35))
         disc(cx - int(r * 0.1), cy - int(r * 0.25), int(r * 0.42))
     elif kind == "rain":
-        draw_weather_glyph(draw, cx, cy - int(r * 0.15), int(r * 0.75),
-                           "cloud", colour)
+        draw_weather_glyph(draw, cx, cy - int(r * 0.15), int(r * 0.75), "cloud")
         for dx in (-int(r * 0.45), 0, int(r * 0.45)):
             draw.line((cx + dx, cy + int(r * 0.35),
                        cx + dx - int(r * 0.15), cy + int(r * 0.95)),
                       fill=colour, width=max(2, w))
     elif kind == "snow":
-        draw_weather_glyph(draw, cx, cy - int(r * 0.15), int(r * 0.75),
-                           "cloud", colour)
+        draw_weather_glyph(draw, cx, cy - int(r * 0.15), int(r * 0.75), "cloud")
         for dx, dy in ((-int(r * 0.4), int(r * 0.45)),
                        (0, int(r * 0.7)),
                        (int(r * 0.4), int(r * 0.5))):
@@ -365,8 +390,7 @@ def draw_weather_glyph(draw, cx, cy, radius, kind, colour):
             draw.line((cx - r + inset, cy + dy, cx + r - inset, cy + dy),
                       fill=colour, width=max(2, w))
     else:  # storm
-        draw_weather_glyph(draw, cx, cy - int(r * 0.2), int(r * 0.7),
-                           "cloud", colour)
+        draw_weather_glyph(draw, cx, cy - int(r * 0.2), int(r * 0.7), "cloud")
         bolt = [
             (cx - int(r * 0.1), cy + int(r * 0.05)),
             (cx + int(r * 0.35), cy + int(r * 0.05)),
@@ -376,7 +400,8 @@ def draw_weather_glyph(draw, cx, cy, radius, kind, colour):
             (cx - int(r * 0.05), cy + int(r * 0.55)),
             (cx - int(r * 0.25), cy + int(r * 0.55)),
         ]
-        draw.polygon(bolt, fill=colour, outline=colour)
+        draw.polygon(bolt, fill=STORM_BOLT, outline=STORM_BOLT)
+
 
 
 def render_weather(draw, item, weather, width, height, short, fitted,
@@ -405,11 +430,12 @@ def render_weather(draw, item, weather, width, height, short, fitted,
         return x, y, x + drawn, y + text_height(font, text)
 
     if fmt == "now":
-        glyph = weather_glyph_kind(weather.get("code"))
+        is_day = weather.get("is_day", True)
+        glyph = weather_glyph_kind(weather.get("code"), is_day=is_day)
         radius = max(8, item["size"] * short * 0.35)
         cx = left + radius + 4
         cy = top + radius + 2
-        draw_weather_glyph(draw, cx, cy, radius, glyph, colour)
+        draw_weather_glyph(draw, cx, cy, radius, glyph)
         rects.append((cx - radius - 4, cy - radius - 2,
                       cx + radius + 4, cy + radius + 4))
         text_x = cx + radius + 10
@@ -445,8 +471,9 @@ def render_weather(draw, item, weather, width, height, short, fitted,
             draw.text((nx, top), name, font=font, fill=label_colour)
             rects.append((nx, top, nx + nw, top + text_height(font, name)))
             gy = top + name_px * 1.15 + glyph_r
+            # Daily icons use daytime glyphs -- each column is a calendar day.
             draw_weather_glyph(draw, cx, gy, glyph_r,
-                               weather_glyph_kind(day.get("code")), colour)
+                               weather_glyph_kind(day.get("code"), is_day=True))
             rects.append((cx - glyph_r, gy - glyph_r,
                           cx + glyph_r, gy + glyph_r))
             temps = day.get("temps") or ""

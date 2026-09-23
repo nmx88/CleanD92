@@ -799,7 +799,7 @@ def fetch_weather(place, country="GR", units="C"):
             + urllib.parse.urlencode({
                 "latitude": lat,
                 "longitude": lon,
-                "current": "temperature_2m,weather_code",
+                "current": "temperature_2m,weather_code,is_day",
                 "daily": "weather_code,temperature_2m_max,temperature_2m_min",
                 "timezone": "auto",
                 "forecast_days": 7,
@@ -830,6 +830,7 @@ def fetch_weather(place, country="GR", units="C"):
             "place": place_label[:28],
             "temp": _format_temp(current.get("temperature_2m"), units),
             "code": current.get("weather_code", 0),
+            "is_day": bool(current.get("is_day", 1)),
             "daily": days,
         }
         with _weather_lock:
@@ -1063,6 +1064,7 @@ def metric_values(cfg, filename=None):
                 "place": place[:28],
                 "temp": note,
                 "code": 0,
+                "is_day": True,
                 "daily": [{"name": "\u2014", "code": 0, "temps": note}] * 3,
             }
     return values
