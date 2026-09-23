@@ -191,6 +191,83 @@ gets a readout for both.
 | `timed out` | Something is listening but not answering. Try `127.0.0.1` instead of `localhost`, or a different port. |
 | `connected, but no usable sensors in the tree` | LibreHardwareMonitor is not elevated, or monitoring is switched off in its settings. |
 
+## Getting media that looks good on it
+
+The panel is an extreme strip: **1920 × 462, about 4.16:1**. Almost nothing
+you already have is that shape, and the mismatch is what makes most clips
+look bad rather than anything about the panel itself.
+
+### What to look for
+
+Search for **ultrawide**, **32:9**, **dual monitor** or **banner** wallpapers
+and loops. Material made for those shapes crops down to the panel with room
+to spare and stays sharp, because you are scaling **down** rather than up.
+
+| Source shape | Common name | Crop needed | Result |
+|---|---|---|---|
+| 3840 × 1080 | 32:9, dual monitor | keeps 86% of the height, scales 0.50× | excellent, still sharp |
+| 5120 × 1440 | super ultrawide | keeps 86%, scales 0.375× | excellent |
+| 3440 × 1440 | 21:9 ultrawide | keeps 57%, scales 0.56× | good |
+| 1920 × 1080 | ordinary 16:9 | keeps 43%, no scaling | usable, plan the framing |
+| 1080 × 1920 | phone wallpaper | keeps 14%, scales 1.8× up | poor — a thin band of the picture |
+| small phone GIF, e.g. 270 × 480 | social-media loop | keeps 14%, scales 7× up | unusable |
+
+Free, no-attribution-needed loops and stills: **Pixabay** and **Pexels**.
+Filter by orientation and sort by resolution; anything 3840 wide or more is a
+good candidate.
+
+Portrait sources are the ones to avoid. Cropping a 0.56:1 picture to 4.16:1
+leaves a band about one seventh of its height — usually a strip of background
+with the subject cut away — and if the source is small as well, that band then
+has to be enlarged several times over. The two workarounds both cost
+something: centring the whole picture with blurred bars stays sharp but fills
+only about 14% of the strip, and tiling it across fills the panel but reads as
+obvious wallpaper repetition with the subject chopped at every seam.
+
+### Fit
+
+**Cover (crop)** fills the strip and cuts off whatever does not fit — right
+for landscapes, water, abstract textures. **Letterbox** shows the whole frame
+with black bars — right when the subject would otherwise be cut in half.
+
+### Preparing your own with ffmpeg
+
+The panel only ever receives JPEG, so video has to become an animated GIF
+first. One command does the whole job — scale, crop and a decent palette:
+
+```
+ffmpeg -i clip.mp4 -vf "fps=12,scale=1920:462:force_original_aspect_ratio=increase,crop=1920:462,split[a][b];[a]palettegen=max_colors=128[p];[b][p]paletteuse=dither=bayer" -loop 0 panel.gif
+```
+
+- `fps=12` — the panel shows roughly 3 frames a second at the default 350 ms
+  interval, so anything above 12 is wasted file size.
+- `force_original_aspect_ratio=increase` then `crop` is the "cover" fit. For
+  letterbox, use `decrease` and add `,pad=1920:462:-1:-1:black`.
+- Keep the clip **under about 12 seconds**. Longer animations are subsampled
+  to 150 frames when loaded, so the extra frames cost download size and give
+  nothing back.
+
+Trim a longer video first with `-ss 00:00:05 -t 10` before the `-i`.
+
+### Sizes and smoothness
+
+Frames are re-encoded internally, so a large GIF costs memory only while it
+loads — but it still has to live in your `media` folder. A 1920 × 462 loop of
+90 frames lands around 30 MB; 128 colours instead of 256 roughly halves that
+with very little visible difference on this panel.
+
+If a GIF looks jerky, lower **Interval (ms)** towards 150–200. That genuinely
+helps, at the cost of a higher chance of the random USB dropouts described
+below. 350 ms is the value known to be safe; everything under it is a
+trade you make knowingly.
+
+### A note on other people's work
+
+Plenty of the nicest loops are signed by whoever drew them. Please leave the
+signature where it is — it is usually the only way anyone can find the artist.
+If a watermark bothers you, the free-licence sources above have material with
+none.
+
 ## Known limitations of the panel
 
 Properties of the hardware, not bugs in this app.

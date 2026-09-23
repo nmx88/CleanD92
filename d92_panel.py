@@ -4,9 +4,8 @@ d92_panel.py -- control panel for the MiraBox StreamDock D92.
 
 Run this, open http://127.0.0.1:8092 in a browser, and drive the panel from
 there: pick an image or animated GIF, overlay a clock and CPU/RAM readout,
-set brightness and refresh interval, and restart or shut down the machine.
-Nothing is uploaded anywhere; media is read from the ./media folder next to
-this script.
+set brightness and refresh interval. Nothing is uploaded anywhere; media is
+read from the ./media folder next to this script.
 
 Requires d92.py in the same folder, plus:  pip install hidapi pillow psutil
 
@@ -19,7 +18,7 @@ ARCHITECTURE -- this is not decoration, it is what keeps the panel alive:
   Reopening the handle within one physical USB connection is the confirmed
   #1 cause of a permanently black panel, so there is deliberately no reopen
   path anywhere in here. If a write fails the stream stops, the UI says so,
-  and you physically replug and restart this script.
+  and you physically replug then quit and open CleanD92 again.
 
   The render thread also never goes idle -- it pushes a frame every interval
   whether or not anything changed, which is the second hard requirement of
@@ -91,7 +90,7 @@ state = {
     "quality": 85,
     "slide_seconds": 8,       # dwell time per file in slideshow mode
     "slide_shuffle": False,
-    "show_gpu": True,         # poll LibreHardwareMonitor for GPU sensors
+    "show_gpu": False,        # opt-in: LHM is external and often not running
     "lhm_url": "http://localhost:8085/data.json",
     "color_bg": "#080a0e",
     # The layout: a list of positioned items. See d92_layout for the schema.
@@ -322,12 +321,14 @@ LHM_TIMEOUT = 2.5         # generous: this runs off the render thread
 # far more reliable category hint than guessing from the device name.
 ICON_CATEGORIES = {
     "cpu": "cpu", "amd": "gpu", "ati": "gpu", "nvidia": "gpu",
-    "intelgpu": "gpu", "hdd": "storage", "ssd": "storage",
+    # LHM uses intel.png for Intel iGPU (UHD/Arc), intelgpu.png on older builds.
+    "intelgpu": "gpu", "intel": "gpu",
+    "hdd": "storage", "ssd": "storage",
     "nvme": "storage", "ram": "memory", "mainboard": "board",
 }
 NAME_HINTS = (
     ("gpu", ("radeon", "geforce", "nvidia", "arc ", "iris", "vega",
-             "quadro", "graphics")),
+             "quadro", "graphics", "uhd graphics")),
     ("cpu", ("ryzen", "core i", "core ultra", "threadripper", "xeon",
              "athlon", "pentium", "celeron", "cpu")),
     ("storage", ("ssd", "nvme", "hdd", "hard disk", "st1", "st2", "wdc",
@@ -392,13 +393,20 @@ def fetch_lhm(url):
         for child in node.get("Children") or []:
             leaves(child, found)
 
-    def pick(found, unit, keywords):
-        """First sensor carrying `unit` whose name matches any keyword."""
-        for text, value in found:
-            if unit in value and any(word in text for word in keywords):
-                got = number(value)
-                if got is not None:
-                    return got
+    def pick(found, unit, keywords, reject=()):
+        """First sensor carrying `unit` whose name matches any keyword.
+
+        Keywords are tried in order so a preferred name (e.g. 'gpu core')
+        wins over a looser one (e.g. '3d'). `reject` skips threshold sensors
+        such as Warning Temperature that also carry a degree value."""
+        for word in keywords:
+            for text, value in found:
+                if any(bad in text for bad in reject):
+                    continue
+                if unit in value and word in text:
+                    got = number(value)
+                    if got is not None:
+                        return got
         return None
 
     counts = {"gpu": 0, "storage": 0, "cpu": 0}
@@ -415,9 +423,12 @@ def fetch_lhm(url):
             if category == "gpu":
                 index = counts["gpu"]
                 counts["gpu"] += 1
-                load = pick(found, "%", ("core", "load", "3d", "usage"))
-                temp = pick(found, "\u00b0", ("core", "hot", "edge",
-                                              "temperature"))
+                # Prefer GPU Core % over the many D3D engine counters LHM lists.
+                load = pick(found, "%", ("gpu core", "core load", "d3d 3d",
+                                          "3d", "load", "usage"))
+                temp = pick(found, "\u00b0", ("hot spot", "hotspot", "gpu core",
+                                              "core", "edge", "temperature"),
+                            reject=("warning", "critical", "limit"))
                 parts = []
                 if load is not None:
                     parts.append("%.0f%%" % load)
@@ -434,16 +445,22 @@ def fetch_lhm(url):
 
             elif category == "cpu" and not counts["cpu"]:
                 counts["cpu"] += 1
-                temp = pick(found, "\u00b0", ("package", "core average",
-                                               "core max", "tctl", "cpu",
-                                               "temperature"))
+                # Package first when present; Core Average / Max on modern
+                # Intel trees that only expose per-core and aggregates.
+                temp = pick(found, "\u00b0", ("tctl/tdie", "tctl", "package",
+                                               "core average", "core max",
+                                               "cpu", "temperature"),
+                            reject=("warning", "critical", "limit", "distance"))
                 if temp is not None:
                     values["cpu_temp"] = ("CPU TEMP", "%.0f\u00b0C" % temp)
 
             elif category == "storage":
                 index = counts["storage"]
                 counts["storage"] += 1
-                temp = pick(found, "\u00b0", ("temperature",))
+                # Composite / plain Temperature before Warning/Critical thresholds.
+                temp = pick(found, "\u00b0", ("composite temperature",
+                                               "temperature",),
+                            reject=("warning", "critical", "limit"))
                 if temp is not None:
                     values["disk%d_temp" % index] = (
                         "%s TEMP" % shorten(name, 10), "%.0f\u00b0C" % temp)
@@ -474,7 +491,11 @@ def lhm_placeholder():
     low = error.lower()
     if ("timed out" in low or "refused" in low or "unreachable" in low
             or "no route" in low or "10061" in low):
+        # Short: the panel strip has no room for a how-to. The GPU sensors
+        # group in the window explains LibreHardwareMonitor elevation.
         return "no LHM"
+    if "no usable sensors" in low:
+        return "empty LHM"
     return (error or "no data")[:20]
 
 
@@ -804,7 +825,20 @@ def render_loop(panel):
                             random.shuffle(playlist)
                     wanted = playlist[pos]
                 else:
-                    runtime["message"] = "media folder is empty"
+                    # Keep coaching on the status line every empty tick so a
+                    # later successful load does not leave a stale hint.
+                    runtime["message"] = (
+                        "media folder is empty -- drop ultrawide .png .jpg "
+                        ".gif files in media/, or use Open media folder")
+
+            if cfg["mode"] == "media" and not wanted:
+                if not list_media():
+                    runtime["message"] = (
+                        "media folder is empty -- drop ultrawide .png .jpg "
+                        ".gif files in media/, or use Open media folder")
+                else:
+                    runtime["message"] = (
+                        "no file selected -- pick one under Source")
 
             # -- ask for whatever should be on screen, without waiting ---
             if wanted != loaded:
@@ -863,12 +897,16 @@ def render_loop(panel):
             runtime["last_ms"] = int(elapsed * 1000)
             if elapsed > STALL_WARN:
                 runtime["message"] = ("last frame took %.1fs -- the device may "
-                                      "be stalling" % elapsed)
+                                      "be stalling; try Wake, or unplug and "
+                                      "replug if it stays dark" % elapsed)
 
         except D92Error as exc:
             runtime["status"] = "error"
-            runtime["message"] = ("%s -- unplug and replug the panel, then "
-                                  "restart this script" % exc)
+            # Exe users do not "restart this script" -- quit and open again.
+            # Deliberately no reopen: that blacks the panel until a replug.
+            runtime["message"] = (
+                "%s -- unplug and replug the panel, then quit and open "
+                "CleanD92 again" % exc)
             print("\n[device] %s" % runtime["message"])
             return
         except Exception as exc:
@@ -907,11 +945,10 @@ input[type=range]{width:100%}
 .seg button.danger{border-color:#5c2027;color:#ffb3bd}
 .chk{display:flex;align-items:center;gap:9px;margin:9px 0;color:#c7cedd}
 .chk input{width:17px;height:17px}
-#status,#power{border-radius:10px;padding:11px 14px;font-size:13px;
+#status{border-radius:10px;padding:11px 14px;font-size:13px;
  background:#12261a;border:1px solid #1f4a30;color:#9fe3b6}
 #status.error{background:#2a1417;border-color:#5c2027;color:#ffb3bd}
-#power{background:#2a230f;border-color:#5c4a20;color:#ffdfa0;margin-top:12px;
- display:none}
+#status.holding{background:#2a2412;border-color:#5c4a20;color:#e6d29f}
 .hint{color:#6b7488;font-size:12px;margin-top:6px}
 #pvwrap{background:#000;border:1px solid #2a3040;border-radius:8px;
  padding:8px;display:flex;justify-content:center;align-items:center;
@@ -1091,8 +1128,13 @@ async function refresh(){
   fillPresets(j.presets, st.preset);
   paint();
   const s = $('status');
-  s.className = j.runtime.status==='error' ? 'error':'';
-  s.innerHTML = '<b>'+j.runtime.status+'</b> \\u00b7 '+j.runtime.frames+
+  let cls = '';
+  if(j.runtime.status==='error') cls = 'error';
+  else if(st.hold) cls = 'holding';
+  s.className = cls;
+  const head = st.hold && j.runtime.status!=='error'
+    ? j.runtime.status+' \\u00b7 holding' : j.runtime.status;
+  s.innerHTML = '<b>'+head+'</b> \\u00b7 '+j.runtime.frames+
     ' frames \\u00b7 '+j.runtime.last_ms+' ms' +
     (j.runtime.message ? ' \\u00b7 '+j.runtime.message : '');
 }
@@ -1322,6 +1364,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     os.makedirs(MEDIA_DIR, exist_ok=True)
+    os.makedirs(layout.preset_dir(HERE), exist_ok=True)
 
     print("Opening the D92 (close the official MiraBox software first)...")
     try:

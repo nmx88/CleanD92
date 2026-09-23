@@ -180,6 +180,11 @@ class PanelApp:
                                text="starting\u2026")
         self.status.pack(fill="x", pady=(12, 0))
 
+        help_row = ttk.Frame(left)
+        help_row.pack(fill="x", pady=(8, 0))
+        ttk.Button(help_row, text="Help",
+                   command=self.show_help).pack(side="left")
+
         self.sensors = tk.Text(left, height=11, bg="#12151c", fg="#9aa5b8",
                                bd=0, padx=10, pady=8, wrap="word",
                                font=("Consolas", 9))
@@ -224,7 +229,7 @@ class PanelApp:
                              ("Image / GIF", "media"),
                              ("Slideshow", "slideshow")):
             self._radio(row, label, value, self.mode,
-                        lambda: self.push(mode=self.mode.get()))
+                        lambda: self._set_mode(self.mode.get()))
 
         ttk.Label(group, text="File", style="Dim.TLabel").pack(anchor="w",
                                                                pady=(8, 2))
@@ -239,19 +244,24 @@ class PanelApp:
         ttk.Button(group, text="Open media folder",
                    command=self.open_folder).pack(fill="x", pady=(6, 0))
 
+        # Fit / slideshow controls are packed only when the mode needs them,
+        # so first-run Info screen is not buried under GIF knobs.
+        self.fit_frame = ttk.Frame(group)
         self.fit = tk.StringVar()
-        ttk.Label(group, text="Fit", style="Dim.TLabel").pack(anchor="w",
-                                                              pady=(8, 2))
-        fitrow = ttk.Frame(group)
+        ttk.Label(self.fit_frame, text="Fit", style="Dim.TLabel").pack(
+            anchor="w", pady=(8, 2))
+        fitrow = ttk.Frame(self.fit_frame)
         fitrow.pack(fill="x")
         for label, value in (("Cover (crop)", "cover"),
                              ("Letterbox", "letterbox")):
             self._radio(fitrow, label, value, self.fit,
                         lambda: self.push(fit=self.fit.get()), side="left")
 
-        self.slide_seconds = self._spin(group, "Seconds per file", 2, 600,
-                                        "slide_seconds")
-        self.slide_shuffle = self._check(group, "Shuffle slideshow order",
+        self.slide_frame = ttk.Frame(group)
+        self.slide_seconds = self._spin(self.slide_frame, "Seconds per file",
+                                        2, 600, "slide_seconds")
+        self.slide_shuffle = self._check(self.slide_frame,
+                                         "Shuffle slideshow order",
                                          "slide_shuffle")
 
     def _layout_group(self, parent):
@@ -316,58 +326,72 @@ class PanelApp:
         props.pack(fill="x", pady=(0, 10))
         self.props = props
 
-        ttk.Label(props, text="Readout source", style="Dim.TLabel"
+        # Field frames are packed into fields_host so they stay above the
+        # nudge row when shown/hidden per item type.
+        self.fields_host = ttk.Frame(props)
+        self.fields_host.pack(fill="x")
+
+        self.prop_source = ttk.Frame(self.fields_host)
+        ttk.Label(self.prop_source, text="Readout source", style="Dim.TLabel"
                   ).pack(anchor="w")
         self.item_source = tk.StringVar()
-        self.source_box = ttk.Combobox(props, textvariable=self.item_source,
+        self.source_box = ttk.Combobox(self.prop_source,
+                                       textvariable=self.item_source,
                                        state="readonly", values=[])
         self.source_box.pack(fill="x")
         self.source_box.bind("<<ComboboxSelected>>", lambda e: self.edit(
             source=self.source_labels.get(self.item_source.get(),
                                           self.item_source.get())))
 
-        ttk.Label(props, text="Fixed text / name prefix", style="Dim.TLabel"
-                  ).pack(anchor="w", pady=(8, 0))
+        self.prop_text = ttk.Frame(self.fields_host)
+        ttk.Label(self.prop_text, text="Fixed text / name prefix",
+                  style="Dim.TLabel").pack(anchor="w")
         self.item_text = tk.StringVar()
-        text_entry = ttk.Entry(props, textvariable=self.item_text)
+        text_entry = ttk.Entry(self.prop_text, textvariable=self.item_text)
         text_entry.pack(fill="x")
         text_entry.bind("<Return>",
                         lambda e: self.edit(text=self.item_text.get()))
         text_entry.bind("<FocusOut>",
                         lambda e: self.edit(text=self.item_text.get()))
 
-        ttk.Label(props, text="Time format (clock and date)",
-                  style="Dim.TLabel").pack(anchor="w", pady=(8, 0))
+        self.prop_format = ttk.Frame(self.fields_host)
+        ttk.Label(self.prop_format, text="Time format (clock and date)",
+                  style="Dim.TLabel").pack(anchor="w")
         self.item_format = tk.StringVar()
-        fmt = ttk.Entry(props, textvariable=self.item_format)
+        fmt = ttk.Entry(self.prop_format, textvariable=self.item_format)
         fmt.pack(fill="x")
         fmt.bind("<Return>", lambda e: self.edit(format=self.item_format.get()))
         fmt.bind("<FocusOut>",
                  lambda e: self.edit(format=self.item_format.get()))
 
-        self.item_size = self._item_slider(props, "Size", 2, 150, "size",
-                                           scale=0.01)
+        self.prop_size = ttk.Frame(self.fields_host)
+        self.item_size = self._item_slider(self.prop_size, "Size", 2, 150,
+                                           "size", scale=0.01)
+
+        self.prop_align = ttk.Frame(self.fields_host)
         self.item_align = tk.StringVar()
-        ttk.Label(props, text="Align", style="Dim.TLabel").pack(anchor="w",
-                                                                pady=(8, 0))
-        arow = ttk.Frame(props)
+        ttk.Label(self.prop_align, text="Align", style="Dim.TLabel").pack(
+            anchor="w")
+        arow = ttk.Frame(self.prop_align)
         arow.pack(fill="x")
         for name in layout.ALIGNMENTS:
             self._radio(arow, name.title(), name, self.item_align,
                         lambda: self.edit(align=self.item_align.get()),
                         side="left")
 
+        self.prop_label = ttk.Frame(self.fields_host)
         self.item_show_label = tk.BooleanVar()
-        tk.Checkbutton(props, text="Show label", variable=self.item_show_label,
+        tk.Checkbutton(self.prop_label, text="Show label",
+                       variable=self.item_show_label,
                        command=lambda: self.edit(
                            show_label=self.item_show_label.get()),
-                       **self.WIDGET_COLOURS).pack(fill="x", anchor="w",
-                                                   pady=(8, 0))
+                       **self.WIDGET_COLOURS).pack(fill="x", anchor="w")
 
+        self.prop_colours = ttk.Frame(self.fields_host)
         self.item_swatches = {}
         for key, label in (("color", "Value colour"),
                            ("label_color", "Label colour")):
-            row = ttk.Frame(props)
+            row = ttk.Frame(self.prop_colours)
             row.pack(fill="x", pady=2)
             ttk.Label(row, text=label, width=14).pack(side="left")
             swatch = tk.Button(row, text="", width=6, bd=1, relief="solid",
@@ -428,7 +452,7 @@ class PanelApp:
         for label, value in (("Horizontal", "horizontal"),
                              ("Vertical", "vertical")):
             self._radio(row, label, value, self.layout,
-                        lambda: self.push(layout=self.layout.get()),
+                        lambda: self._set_orientation(self.layout.get()),
                         side="left")
         self.flip = self._check(group, "Flip 180\u00b0", "flip")
         ttk.Label(group, wraplength=380, style="Dim.TLabel",
@@ -738,6 +762,120 @@ class PanelApp:
 
     # -- state ------------------------------------------------------------
 
+    # Built-in presets that pair with content orientation. Switching
+    # Horizontal <-> Vertical loads the matching dashboard when the user is
+    # still on one of these names -- custom presets are left alone.
+    ORIENT_PRESETS = {
+        ("horizontal", "vertical"): {
+            "Wide dashboard": "Tall dashboard",
+            "Wide clock only": "Tall dashboard",
+            "Media with caption": "Tall dashboard",
+        },
+        ("vertical", "horizontal"): {
+            "Tall dashboard": "Wide dashboard",
+        },
+    }
+
+    def _set_mode(self, mode):
+        self.push(mode=mode)
+        self._sync_mode_widgets(mode)
+
+    def _set_orientation(self, orientation):
+        """Change layout; swap to a matching built-in preset when appropriate."""
+        with core.state_lock:
+            old = core.state["layout"]
+            preset = core.state["preset"]
+        patch = {"layout": orientation}
+        target = self.ORIENT_PRESETS.get((old, orientation), {}).get(preset)
+        if target and old != orientation:
+            try:
+                items = layout.load_preset(core.HERE, target)
+                patch["items"] = items
+                patch["preset"] = target
+            except Exception:
+                pass
+        self.push(**patch)
+
+    def _sync_mode_widgets(self, mode=None):
+        if mode is None:
+            mode = self.mode.get()
+        if mode in ("media", "slideshow"):
+            self.fit_frame.pack(fill="x", pady=(0, 0))
+        else:
+            self.fit_frame.pack_forget()
+        if mode == "slideshow":
+            self.slide_frame.pack(fill="x", pady=(0, 0))
+        else:
+            self.slide_frame.pack_forget()
+
+    def _sync_prop_widgets(self, item_type):
+        """Show only the fields that the selected item type uses."""
+        for frame in (self.prop_source, self.prop_text, self.prop_format,
+                      self.prop_size, self.prop_align, self.prop_label,
+                      self.prop_colours):
+            frame.pack_forget()
+        if not item_type:
+            return
+        order = []
+        if item_type == "stat":
+            order = [self.prop_source, self.prop_size, self.prop_align,
+                     self.prop_label, self.prop_colours]
+        elif item_type in ("clock", "date"):
+            order = [self.prop_format, self.prop_size, self.prop_align,
+                     self.prop_colours]
+        elif item_type == "text":
+            order = [self.prop_text, self.prop_size, self.prop_align,
+                     self.prop_colours]
+        elif item_type == "filename":
+            order = [self.prop_text, self.prop_size, self.prop_align,
+                     self.prop_label, self.prop_colours]
+        for frame in order:
+            frame.pack(fill="x", pady=(8, 0) if frame is not order[0] else (0, 0))
+
+    def show_help(self):
+        win = tk.Toplevel(self.root)
+        win.title("%s \u2014 Help" % APP_NAME)
+        win.configure(bg="#14161b")
+        win.minsize(420, 360)
+        text = (
+            "Getting started\n"
+            "\n"
+            "\u2022 Close the official MiraBox software before opening "
+            "CleanD92 \u2014 it holds the USB device open.\n"
+            "\u2022 Put images and GIFs in the media folder beside the exe "
+            "(Open media folder). Ultrawide / 32:9 sources crop cleanly; "
+            "phone portraits do not.\n"
+            "\u2022 Info screen works with an empty media folder. Image / "
+            "GIF and Slideshow need files there.\n"
+            "\n"
+            "Temperatures and GPU\n"
+            "\n"
+            "\u2022 CPU load, RAM, disk usage, network and uptime need "
+            "nothing else.\n"
+            "\u2022 CPU / GPU / disk temperatures need LibreHardwareMonitor "
+            "running as administrator with Options \u2192 Remote Web Server "
+            "\u2192 Run, then tick Poll LibreHardwareMonitor here.\n"
+            "\n"
+            "If the panel goes black\n"
+            "\n"
+            "\u2022 Unplug and replug the panel, then quit and open "
+            "CleanD92 again. There is no reconnect button on purpose: "
+            "reopening the HID handle within one plug leaves the panel "
+            "black until a physical replug.\n"
+            "\u2022 350 ms between frames is the safe cadence. Lower is "
+            "smoother for GIFs and raises the chance of random USB "
+            "dropouts.\n"
+            "\n"
+            "Hold keeps the panel on its last frame while you edit; Apply "
+            "now pushes one fresh frame."
+        )
+        body = tk.Text(win, wrap="word", bg="#1b1f27", fg="#e6e9ef",
+                       bd=0, padx=14, pady=12, font=("Segoe UI", 10))
+        body.pack(fill="both", expand=True, padx=12, pady=12)
+        body.insert("1.0", text)
+        body.configure(state="disabled")
+        ttk.Button(win, text="Close", command=win.destroy).pack(pady=(0, 12))
+
     def push(self, **patch):
         """Validate through the same code path the browser UI uses."""
         if self._suspend:
@@ -781,10 +919,14 @@ class PanelApp:
             self.item_list.delete(0, "end")
             chosen = None
             for index, item in enumerate(items):
-                label, value = layout.item_strings(item, {"filename": "\u2026"})
-                shown = "%-9s %s" % (layout.ITEM_TYPES[item["type"]],
-                                     (value or label or "")[:20])
-                self.item_list.insert("end", shown)
+                kind = layout.ITEM_TYPES[item["type"]]
+                if item["type"] == "stat":
+                    detail = item.get("source") or ""
+                else:
+                    label, value = layout.item_strings(
+                        item, {"filename": "\u2026"})
+                    detail = (value or label or "")[:20]
+                self.item_list.insert("end", "%-9s %s" % (kind, detail))
                 if item["id"] == self.selected:
                     chosen = index
             if chosen is not None:
@@ -813,8 +955,10 @@ class PanelApp:
                     swatch.configure(bg=item[key], activebackground=item[key])
                 self.props.configure(text="Selected item \u2014 %s" %
                                           layout.ITEM_TYPES[item["type"]])
+                self._sync_prop_widgets(item["type"])
             else:
                 self.props.configure(text="Selected item \u2014 none")
+                self._sync_prop_widgets(None)
 
             files = core.list_media()
             self.media_box.configure(values=files or ["(media folder empty)"])
@@ -824,6 +968,7 @@ class PanelApp:
                 self.media.set(files[0])
             else:
                 self.media.set("(media folder empty)")
+            self._sync_mode_widgets(st["mode"])
         finally:
             self._suspend = False
 
@@ -930,13 +1075,27 @@ class PanelApp:
                 pass
 
         rt = dict(core.runtime)
+        with core.state_lock:
+            holding = core.state["hold"]
+            show_gpu = core.state["show_gpu"]
         bad = rt["status"] in ("error", "stopped")
+        parts = [rt["status"]]
+        if holding and not bad:
+            parts.append("holding")
+        line = "%s \u00b7 %d frames \u00b7 %d ms" % (
+            " \u00b7 ".join(parts), rt["frames"], rt["last_ms"])
+        message = rt["message"] or ""
+        if show_gpu and not bad:
+            _, lhm_error, stamp = core.lhm_values()
+            if stamp and lhm_error and "refused" in lhm_error.lower():
+                hint = ("LibreHardwareMonitor is not reachable \u2014 run it "
+                        "as administrator with the remote web server on")
+                message = ("%s\n%s" % (message, hint)).strip() if message \
+                    else hint
         self.status.configure(
-            bg="#2a1417" if bad else "#12261a",
-            fg="#ffb3bd" if bad else "#9fe3b6",
-            text="%s \u00b7 %d frames \u00b7 %d ms%s" % (
-                rt["status"], rt["frames"], rt["last_ms"],
-                "\n" + rt["message"] if rt["message"] else ""))
+            bg="#2a1417" if bad else ("#2a2412" if holding else "#12261a"),
+            fg="#ffb3bd" if bad else ("#e6d29f" if holding else "#9fe3b6"),
+            text="%s%s" % (line, "\n" + message if message else ""))
         self._after = self.root.after(REFRESH_MS, self.tick)
 
     def quit(self):
@@ -966,6 +1125,9 @@ class PanelApp:
 def start_backend():
     """Open the device, replay the wake sequence, start the render thread."""
     os.makedirs(core.MEDIA_DIR, exist_ok=True)
+    # README promises both folders on first run; presets/ was only created
+    # when the user saved one.
+    os.makedirs(layout.preset_dir(core.HERE), exist_ok=True)
     panel = D92().open()
     with core.state_lock:
         brightness = core.state["brightness"]
@@ -993,21 +1155,58 @@ DEVICE_HELP = (
 )
 
 
+def no_device_dialog(exc):
+    """Stay-open window so the user can plug in and Retry without relaunching
+    from Explorer. Retry starts a fresh open attempt; we never reopen a handle
+    that already succeeded (that path is what blacks the panel)."""
+    result = {"retry": False}
+    root = tk.Tk()
+    root.title(APP_NAME)
+    root.configure(bg="#14161b")
+    root.minsize(440, 280)
+    frame = ttk.Frame(root, padding=16)
+    frame.pack(fill="both", expand=True)
+    ttk.Label(frame, text="No panel found",
+              font=("Segoe UI", 12, "bold")).pack(anchor="w")
+    body = tk.Text(frame, wrap="word", height=12, bg="#1b1f27", fg="#e6e9ef",
+                   bd=0, padx=10, pady=8, font=("Segoe UI", 10))
+    body.pack(fill="both", expand=True, pady=(10, 12))
+    body.insert("1.0", DEVICE_HELP % exc)
+    body.configure(state="disabled")
+    row = ttk.Frame(frame)
+    row.pack(fill="x")
+
+    def retry():
+        result["retry"] = True
+        root.destroy()
+
+    def quit_app():
+        result["retry"] = False
+        root.destroy()
+
+    ttk.Button(row, text="Retry", command=retry).pack(side="left",
+                                                      expand=True, fill="x")
+    ttk.Button(row, text="Quit", command=quit_app).pack(
+        side="left", expand=True, fill="x", padx=(8, 0))
+    root.protocol("WM_DELETE_WINDOW", quit_app)
+    root.mainloop()
+    return result["retry"]
+
+
 def main():
     flags = set(sys.argv[1:])
     web = "--web" in flags or "--web-only" in flags
 
-    try:
-        panel = start_backend()
-    except Exception as exc:
-        if "--web-only" in flags:
-            print("Cannot open the device: %s" % exc)
-            return 1
-        root = tk.Tk()
-        root.withdraw()
-        messagebox.showerror(APP_NAME, DEVICE_HELP % exc)
-        root.destroy()
-        return 1
+    panel = None
+    while panel is None:
+        try:
+            panel = start_backend()
+        except Exception as exc:
+            if "--web-only" in flags:
+                print("Cannot open the device: %s" % exc)
+                return 1
+            if not no_device_dialog(exc):
+                return 1
 
     server = start_web() if web else None
     if server:

@@ -128,16 +128,20 @@ def normalise_all(items):
 
 # ----------------------------------------------------------------- presets
 
+# Built-ins use only out-of-the-box sources (psutil). GPU / LHM readouts are
+# easy to add once Poll LibreHardwareMonitor is on -- shipping them in the
+# default layout left every new user staring at "no LHM" on first run.
+# disk_c matches available_sources(); a bare "disk" key never resolves.
 DEFAULT_PRESETS = {
     "Wide dashboard": [
         new_item("clock", x=0.03, y=0.08, size=0.42, color="#ebf0fa"),
         new_item("date", x=0.03, y=0.62, size=0.14, color="#6e7d96"),
         new_item("stat", source="cpu", x=0.50, y=0.06, size=0.19),
         new_item("stat", source="ram", x=0.50, y=0.40, size=0.19),
-        new_item("stat", source="gpu0", x=0.50, y=0.70, size=0.19),
+        new_item("stat", source="uptime", x=0.50, y=0.70, size=0.19),
         new_item("stat", source="net_down", x=0.76, y=0.06, size=0.19),
         new_item("stat", source="net_up", x=0.76, y=0.40, size=0.19),
-        new_item("stat", source="disk", x=0.76, y=0.70, size=0.19),
+        new_item("stat", source="disk_c", x=0.76, y=0.70, size=0.19),
     ],
     "Wide clock only": [
         new_item("clock", x=0.05, y=0.12, size=0.62, color="#ebf0fa"),
@@ -148,7 +152,7 @@ DEFAULT_PRESETS = {
         new_item("filename", x=0.03, y=0.80, size=0.13, color="#ffffff",
                  show_label=False),
         new_item("stat", source="cpu", x=0.70, y=0.08, size=0.16),
-        new_item("stat", source="gpu0", x=0.70, y=0.50, size=0.16),
+        new_item("stat", source="ram", x=0.70, y=0.50, size=0.16),
     ],
     "Tall dashboard": [
         new_item("clock", x=0.07, y=0.03, size=0.34, color="#ebf0fa",
@@ -157,7 +161,7 @@ DEFAULT_PRESETS = {
                  format="%d %b"),
         new_item("stat", source="cpu", x=0.07, y=0.16, size=0.20),
         new_item("stat", source="ram", x=0.07, y=0.26, size=0.20),
-        new_item("stat", source="gpu0", x=0.07, y=0.36, size=0.20),
+        new_item("stat", source="uptime", x=0.07, y=0.36, size=0.20),
         new_item("stat", source="net_down", x=0.07, y=0.46, size=0.20),
         new_item("stat", source="net_up", x=0.07, y=0.56, size=0.20),
         new_item("filename", x=0.07, y=0.90, size=0.10, show_label=False,
