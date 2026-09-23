@@ -9,3 +9,4 @@ venv/
 # Created beside the exe at runtime -- user content, not source
 media/
 presets/
+settings.json

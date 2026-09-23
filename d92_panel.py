@@ -66,6 +66,9 @@ if getattr(sys, "frozen", False):
 else:
     HERE = os.path.dirname(os.path.abspath(__file__))
 MEDIA_DIR = os.path.join(HERE, "media")
+SETTINGS_PATH = os.path.join(HERE, "settings.json")
+# Survives restart. Kept small on purpose -- layouts already live in presets/.
+SETTINGS_KEYS = ("weather_place", "weather_country", "weather_units")
 EXTENSIONS = (".gif", ".png", ".jpg", ".jpeg", ".bmp", ".webp")
 # Soft ceiling for a drop / import. Longer GIFs are fine once they live in
 # media/; this only stops someone dragging a multi-GB file onto the window.
@@ -723,6 +726,21 @@ def _format_temp(value, units):
     return "%.0f\u00b0C" % celsius
 
 
+# Short Greek weekday labels for the forecast strip. Fixed -- do not take
+# these from the Windows locale; the panel is aimed at Greek users first and
+# strftime("%a") would otherwise flip between Greek and English randomly.
+GREEK_WEEKDAYS = ("Δευ", "Τρι", "Τετ", "Πεμ", "Παρ", "Σαβ", "Κυρ")
+
+
+def _weekday_label(day_iso):
+    """YYYY-MM-DD -> short Greek weekday, or the MM-DD fallback."""
+    try:
+        stamp = time.strptime(day_iso, "%Y-%m-%d")
+        return GREEK_WEEKDAYS[stamp.tm_wday]
+    except (TypeError, ValueError):
+        return (day_iso or "?")[-5:]
+
+
 def fetch_weather(place, country="GR", units="C"):
     """Resolve a place name and pull current + 7-day forecast. BLOCKING."""
     import urllib.parse
@@ -797,13 +815,7 @@ def fetch_weather(place, country="GR", units="C"):
         highs = daily.get("temperature_2m_max") or []
         lows = daily.get("temperature_2m_min") or []
         for index, day in enumerate(times):
-            try:
-                # daily.time is YYYY-MM-DD; weekday in local English short form
-                # is fine on the panel -- Greek locales vary by Windows install.
-                stamp = time.strptime(day, "%Y-%m-%d")
-                day_name = time.strftime("%a", stamp)
-            except (TypeError, ValueError):
-                day_name = day[-5:] if day else "?"
+            day_name = _weekday_label(day)
             code_val = codes[index] if index < len(codes) else 0
             high = highs[index] if index < len(highs) else None
             low = lows[index] if index < len(lows) else None
@@ -869,6 +881,49 @@ def start_weather_poller():
         return
     _weather_started = True
     threading.Thread(target=weather_poller, daemon=True).start()
+
+
+def load_settings():
+    """Merge settings.json into state. Missing or broken file is a no-op."""
+    if not os.path.isfile(SETTINGS_PATH):
+        return
+    try:
+        with open(SETTINGS_PATH, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return
+    if not isinstance(data, dict):
+        return
+    with state_lock:
+        place = data.get("weather_place")
+        if isinstance(place, str) and place.strip():
+            state["weather_place"] = place.strip()[:80]
+        country = data.get("weather_country")
+        if isinstance(country, str):
+            code = country.strip().upper()[:2]
+            if code.isalpha():
+                state["weather_country"] = code
+        units = data.get("weather_units")
+        if units in ("C", "F"):
+            state["weather_units"] = units
+
+
+def save_settings():
+    """Write weather prefs beside the exe. Never raises into the UI."""
+    with state_lock:
+        payload = {key: state.get(key) for key in SETTINGS_KEYS}
+    try:
+        tmp = SETTINGS_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, ensure_ascii=False)
+            handle.write("\n")
+        os.replace(tmp, SETTINGS_PATH)
+    except OSError:
+        try:
+            if os.path.isfile(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
 
 
 def human_bytes(value):
@@ -1605,6 +1660,7 @@ COLOR_FIELDS = ("color_bg",)
 def apply_patch(patch):
     """Validate and merge a patch into shared state. Returns the new state."""
     global _weather_invalidate
+    weather_dirty = False
     with state_lock:
         for key, value in patch.items():
             if key in INT_FIELDS:
@@ -1636,13 +1692,16 @@ def apply_patch(patch):
             elif key == "weather_place" and isinstance(value, str):
                 state["weather_place"] = value.strip()[:80]
                 _weather_invalidate = True
+                weather_dirty = True
             elif key == "weather_country" and isinstance(value, str):
                 code = value.strip().upper()[:2]
                 state["weather_country"] = code if code.isalpha() else "GR"
                 _weather_invalidate = True
+                weather_dirty = True
             elif key == "weather_units" and value in ("C", "F"):
                 state["weather_units"] = value
                 _weather_invalidate = True
+                weather_dirty = True
             elif key == "hold":
                 state["hold"] = bool(value)
             elif key == "mode" and value in ("clock", "media", "slideshow"):
@@ -1657,7 +1716,12 @@ def apply_patch(patch):
             elif key == "slide_shuffle":
                 state["slide_shuffle"] = bool(value)
                 runtime["reload_media"] = True
-        return dict(state)
+        snapshot = dict(state)
+    if weather_dirty:
+        # Persist outside the lock: disk I/O must not stall apply_patch callers
+        # that already hold UI or render-adjacent work.
+        save_settings()
+    return snapshot
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1757,6 +1821,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     os.makedirs(MEDIA_DIR, exist_ok=True)
     os.makedirs(layout.preset_dir(HERE), exist_ok=True)
+    load_settings()
 
     print("Opening the D92 (close the official MiraBox software first)...")
     try:

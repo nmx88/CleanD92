@@ -461,8 +461,8 @@ class PanelApp:
                    command=self.refresh_weather).pack(fill="x", pady=(8, 0))
         ttk.Label(group, wraplength=380, style="Dim.TLabel",
                   text="Uses Open-Meteo (no API key). Add a Weather item under "
-                       "Items; set its format to now, 3day or week. Country "
-                       "bias helps Greek place names resolve correctly."
+                       "Items; set its format to now, 3day or week. Place and "
+                       "units are saved in settings.json beside the app."
                   ).pack(anchor="w", pady=(6, 0))
 
     def _gpu_group(self, parent):
@@ -1309,6 +1309,7 @@ def start_backend():
     # README promises both folders on first run; presets/ was only created
     # when the user saved one.
     os.makedirs(layout.preset_dir(core.HERE), exist_ok=True)
+    core.load_settings()
     panel = D92().open()
     with core.state_lock:
         brightness = core.state["brightness"]

@@ -287,7 +287,9 @@ def weather_glyph_kind(code):
         code = 0
     if code == 0:
         return "sun"
-    if code <= 3:
+    if code in (1, 2):
+        return "part"       # mainly clear / partly cloudy
+    if code == 3:
         return "cloud"
     if code in (45, 48):
         return "fog"
@@ -301,42 +303,80 @@ def weather_glyph_kind(code):
 
 
 def draw_weather_glyph(draw, cx, cy, radius, kind, colour):
-    """Tiny vector icons -- no image assets, so the exe stays one file."""
-    r = max(4, int(radius))
+    """Filled vector icons sized for the strip -- no image assets in the exe."""
+    r = max(5, int(radius))
+    w = max(1, r // 6)
+
+    def disc(x, y, rad, fill=True):
+        box = (x - rad, y - rad, x + rad, y + rad)
+        if fill:
+            draw.ellipse(box, fill=colour, outline=colour)
+        else:
+            draw.ellipse(box, outline=colour, width=max(2, w))
+
     if kind == "sun":
-        draw.ellipse((cx - r, cy - r, cx + r, cy + r), outline=colour, width=2)
+        disc(cx, cy, int(r * 0.55))
         for angle in range(0, 360, 45):
             rad = math.radians(angle)
-            x0 = cx + int((r + 2) * math.cos(rad))
-            y0 = cy + int((r + 2) * math.sin(rad))
-            x1 = cx + int((r + 6) * math.cos(rad))
-            y1 = cy + int((r + 6) * math.sin(rad))
-            draw.line((x0, y0, x1, y1), fill=colour, width=2)
+            x0 = cx + int(r * 0.7 * math.cos(rad))
+            y0 = cy + int(r * 0.7 * math.sin(rad))
+            x1 = cx + int(r * 1.05 * math.cos(rad))
+            y1 = cy + int(r * 1.05 * math.sin(rad))
+            draw.line((x0, y0, x1, y1), fill=colour, width=max(2, w))
+    elif kind == "part":
+        # Sun peeks from behind a small cloud.
+        disc(cx - int(r * 0.25), cy - int(r * 0.35), int(r * 0.4))
+        for angle in (200, 240, 280, 320):
+            rad = math.radians(angle)
+            x0 = cx - int(r * 0.25) + int(r * 0.5 * math.cos(rad))
+            y0 = cy - int(r * 0.35) + int(r * 0.5 * math.sin(rad))
+            x1 = cx - int(r * 0.25) + int(r * 0.75 * math.cos(rad))
+            y1 = cy - int(r * 0.35) + int(r * 0.75 * math.sin(rad))
+            draw.line((x0, y0, x1, y1), fill=colour, width=max(2, w))
+        disc(cx + int(r * 0.15), cy + int(r * 0.2), int(r * 0.5))
+        disc(cx - int(r * 0.25), cy + int(r * 0.25), int(r * 0.38))
+        disc(cx + int(r * 0.45), cy + int(r * 0.3), int(r * 0.32))
     elif kind == "cloud":
-        draw.ellipse((cx - r, cy - r // 2, cx + r // 2, cy + r),
-                     outline=colour, width=2)
-        draw.ellipse((cx - r // 3, cy - r, cx + r, cy + r // 2),
-                     outline=colour, width=2)
+        disc(cx, cy + int(r * 0.15), int(r * 0.55))
+        disc(cx - int(r * 0.45), cy + int(r * 0.2), int(r * 0.4))
+        disc(cx + int(r * 0.45), cy + int(r * 0.25), int(r * 0.35))
+        disc(cx - int(r * 0.1), cy - int(r * 0.25), int(r * 0.42))
     elif kind == "rain":
-        draw_weather_glyph(draw, cx, cy - 2, r * 0.7, "cloud", colour)
-        for dx in (-r // 2, 0, r // 2):
-            draw.line((cx + dx, cy + r // 3, cx + dx - 2, cy + r),
-                      fill=colour, width=2)
+        draw_weather_glyph(draw, cx, cy - int(r * 0.15), int(r * 0.75),
+                           "cloud", colour)
+        for dx in (-int(r * 0.45), 0, int(r * 0.45)):
+            draw.line((cx + dx, cy + int(r * 0.35),
+                       cx + dx - int(r * 0.15), cy + int(r * 0.95)),
+                      fill=colour, width=max(2, w))
     elif kind == "snow":
-        draw_weather_glyph(draw, cx, cy - 2, r * 0.7, "cloud", colour)
-        for dx in (-r // 2, 0, r // 2):
-            draw.point((cx + dx, cy + r // 2), fill=colour)
-            draw.point((cx + dx, cy + r), fill=colour)
+        draw_weather_glyph(draw, cx, cy - int(r * 0.15), int(r * 0.75),
+                           "cloud", colour)
+        for dx, dy in ((-int(r * 0.4), int(r * 0.45)),
+                       (0, int(r * 0.7)),
+                       (int(r * 0.4), int(r * 0.5))):
+            x, y = cx + dx, cy + dy
+            s = max(2, r // 5)
+            draw.line((x - s, y, x + s, y), fill=colour, width=max(1, w))
+            draw.line((x, y - s, x, y + s), fill=colour, width=max(1, w))
     elif kind == "fog":
-        for i, dy in enumerate((-r // 2, 0, r // 2)):
-            inset = i * 2
+        for i, dy in enumerate((-int(r * 0.55), -int(r * 0.15),
+                                int(r * 0.25), int(r * 0.65))):
+            inset = (i % 2) * int(r * 0.2)
             draw.line((cx - r + inset, cy + dy, cx + r - inset, cy + dy),
-                      fill=colour, width=2)
+                      fill=colour, width=max(2, w))
     else:  # storm
-        draw_weather_glyph(draw, cx, cy - 3, r * 0.7, "cloud", colour)
-        draw.polygon([(cx - 2, cy), (cx + 4, cy), (cx - 2, cy + r),
-                      (cx + 2, cy + r // 3), (cx - 4, cy + r // 3)],
-                     outline=colour)
+        draw_weather_glyph(draw, cx, cy - int(r * 0.2), int(r * 0.7),
+                           "cloud", colour)
+        bolt = [
+            (cx - int(r * 0.1), cy + int(r * 0.05)),
+            (cx + int(r * 0.35), cy + int(r * 0.05)),
+            (cx - int(r * 0.05), cy + int(r * 0.45)),
+            (cx + int(r * 0.15), cy + int(r * 0.45)),
+            (cx - int(r * 0.35), cy + int(r * 1.05)),
+            (cx - int(r * 0.05), cy + int(r * 0.55)),
+            (cx - int(r * 0.25), cy + int(r * 0.55)),
+        ]
+        draw.polygon(bolt, fill=colour, outline=colour)
 
 
 def render_weather(draw, item, weather, width, height, short, fitted,
