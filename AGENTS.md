@@ -265,6 +265,9 @@ panel within a minute. **Stop and report.**
 Long-run soak with the slideshow, watch `last_ms` and memory. Confirm the
 dropout path reports cleanly rather than hanging. Confirm Hold plus Apply
 behaves across mode changes.
+Harness: `python tools/soak_slideshow.py --minutes 60 --slide 3` (fake
+panel, no HID). A full hour run was paused mid-way — resume when there is
+time; do not treat Phase 3 as done until that soak finishes clean.
 **Done when:** an hour of slideshow shows flat memory and no stalls over
 100 ms. **Stop and report.**
 

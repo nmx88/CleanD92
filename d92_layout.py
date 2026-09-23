@@ -294,18 +294,49 @@ def item_strings(item, values):
     return None, None
 
 
-def weather_glyph_kind(code, is_day=True):
+# Synodic month and a known new-moon epoch (UTC). Phase is a global
+# property of the date -- no API, and the same icon worldwide at a given
+# instant. Northern-hemisphere lighting (waxing lit on the right).
+_MOON_SYNODIC = 29.530588853
+_MOON_NEW_EPOCH = datetime(2000, 1, 6, 18, 14, tzinfo=timezone.utc)
+_MOON_PHASES = (
+    "moon_new",
+    "moon_waxing_crescent",
+    "moon_first_quarter",
+    "moon_waxing_gibbous",
+    "moon_full",
+    "moon_waning_gibbous",
+    "moon_last_quarter",
+    "moon_waning_crescent",
+)
+_MOON_DARK = (8, 10, 14)
+
+
+def moon_phase_kind(when=None):
+    """Map a UTC instant to one of eight drawable moon glyphs."""
+    when = when or datetime.now(timezone.utc)
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    else:
+        when = when.astimezone(timezone.utc)
+    age = ((when - _MOON_NEW_EPOCH).total_seconds() / 86400.0) % _MOON_SYNODIC
+    # +0.5 centres each bucket on the named phase (new, quarters, full).
+    index = int((age / _MOON_SYNODIC) * 8 + 0.5) % 8
+    return _MOON_PHASES[index]
+
+
+def weather_glyph_kind(code, is_day=True, when=None):
     """Map Open-Meteo WMO weather codes to drawable glyphs.
 
     `is_day` comes from current.is_day: clear / partly-clear at night become
-    moon rather than a misleading sun."""
+    the current moon phase rather than a misleading sun."""
     try:
         code = int(code)
     except (TypeError, ValueError):
         code = 0
     day = bool(is_day)
     if code == 0:
-        return "sun" if day else "moon"
+        return "sun" if day else moon_phase_kind(when)
     if code in (1, 2):
         return "part" if day else "part_night"
     if code == 3:
@@ -333,15 +364,68 @@ GLYPH_COLOURS = {
     "snow": (210, 230, 255),
     "fog": (150, 155, 165),
     "storm": (180, 140, 255),
+    # Sunrise stays with the day-sun yellow; sunset shifts coral so the
+    # pair reads apart at the strip's small size without needing arrows.
+    "sunrise": (255, 196, 72),
+    "sunset": (255, 140, 80),
 }
 STORM_BOLT = (255, 220, 90)
+
+
+def _draw_moon_phase(draw, cx, cy, radius, kind, colour):
+    """Bright disc with a dark bite. Kind is one of _MOON_PHASES (or
+    legacy "moon", which resolves to tonight's phase)."""
+    if kind == "moon":
+        kind = moon_phase_kind()
+    rad = max(4, int(radius * 0.7))
+    box = (cx - rad, cy - rad, cx + rad, cy + rad)
+    if kind == "moon_new":
+        # Dim disc rather than an outline -- outlines vanish at strip size.
+        dim = tuple(max(0, int(c * 0.28)) for c in colour)
+        draw.ellipse(box, fill=dim, outline=dim)
+        return
+    draw.ellipse(box, fill=colour, outline=colour)
+    if kind == "moon_full":
+        return
+    if kind == "moon_first_quarter":
+        # Lit on the right (Northern waxing).
+        draw.rectangle((cx - rad - 1, cy - rad - 1, cx, cy + rad + 1),
+                       fill=_MOON_DARK)
+        return
+    if kind == "moon_last_quarter":
+        draw.rectangle((cx, cy - rad - 1, cx + rad + 1, cy + rad + 1),
+                       fill=_MOON_DARK)
+        return
+    lit_right = kind in ("moon_waxing_crescent", "moon_waxing_gibbous")
+    gibbous = kind in ("moon_waxing_gibbous", "moon_waning_gibbous")
+    # Punch with near-black so phases read on the dark panel without
+    # needing the true canvas colour (same trick as the old crescent).
+    if gibbous:
+        if lit_right:
+            bite = (cx - int(rad * 1.55), cy - rad,
+                    cx - int(rad * 0.05), cy + rad)
+        else:
+            bite = (cx + int(rad * 0.05), cy - rad,
+                    cx + int(rad * 1.55), cy + rad)
+    else:
+        if lit_right:
+            bite = (cx - int(rad * 1.25), cy - rad,
+                    cx + int(rad * 0.15), cy + rad)
+        else:
+            bite = (cx - int(rad * 0.15), cy - rad,
+                    cx + int(rad * 1.25), cy + rad)
+    draw.ellipse(bite, fill=_MOON_DARK, outline=_MOON_DARK)
 
 
 def draw_weather_glyph(draw, cx, cy, radius, kind, colour=None):
     """Filled vector icons sized for the strip -- no image assets in the exe."""
     r = max(5, int(radius))
     w = max(1, r // 6)
-    colour = colour or GLYPH_COLOURS.get(kind, (200, 200, 200))
+    if colour is None:
+        if kind == "moon" or kind.startswith("moon_"):
+            colour = GLYPH_COLOURS["moon"]
+        else:
+            colour = GLYPH_COLOURS.get(kind, (200, 200, 200))
 
     def disc(x, y, rad, fill=True, ink=None):
         ink = ink or colour
@@ -360,18 +444,11 @@ def draw_weather_glyph(draw, cx, cy, radius, kind, colour=None):
             x1 = cx + int(r * 1.05 * math.cos(rad))
             y1 = cy + int(r * 1.05 * math.sin(rad))
             draw.line((x0, y0, x1, y1), fill=colour, width=max(2, w))
-    elif kind == "moon":
-        # Crescent: bright disc with a darker bite offset to the right.
-        disc(cx, cy, int(r * 0.7))
-        bite = (
-            cx - int(r * 0.15), cy - int(r * 0.7),
-            cx + int(r * 1.25), cy + int(r * 0.7),
-        )
-        # Punch with near-black so the moon reads as a crescent on the
-        # dark panel background without needing the true canvas colour.
-        draw.ellipse(bite, fill=(8, 10, 14), outline=(8, 10, 14))
+    elif kind == "moon" or kind.startswith("moon_"):
+        _draw_moon_phase(draw, cx, cy, r, kind, colour)
     elif kind in ("part", "part_night"):
-        body = "sun" if kind == "part" else "moon"
+        # part_night uses tonight's phase, not a fixed crescent.
+        body = "sun" if kind == "part" else moon_phase_kind()
         draw_weather_glyph(draw, cx - int(r * 0.25), cy - int(r * 0.35),
                            int(r * 0.55), body)
         cloud = GLYPH_COLOURS["cloud"]
@@ -404,6 +481,33 @@ def draw_weather_glyph(draw, cx, cy, radius, kind, colour=None):
             inset = (i % 2) * int(r * 0.2)
             draw.line((cx - r + inset, cy + dy, cx + r - inset, cy + dy),
                       fill=colour, width=max(2, w))
+    elif kind in ("sunrise", "sunset"):
+        # Half-disc over a horizon. Pillow pieslice angles are clockwise
+        # from 3 o'clock, so 180..360 is the upper half. Rays fan above
+        # the horizon; sunrise reaches higher, sunset stays flatter.
+        horizon_y = cy + int(r * 0.3)
+        sun_r = max(3, int(r * 0.55))
+        disc_box = (cx - sun_r, horizon_y - sun_r,
+                    cx + sun_r, horizon_y + sun_r)
+        draw.pieslice(disc_box, 180, 360, fill=colour, outline=colour)
+        draw.line((cx - r, horizon_y, cx + r, horizon_y),
+                  fill=colour, width=max(2, w))
+        if kind == "sunrise":
+            angles = (210, 240, 270, 300, 330)
+            inner, outer = 0.72, 1.12
+        else:
+            angles = (220, 250, 270, 290, 320)
+            inner, outer = 0.68, 0.98
+        for angle in angles:
+            rad = math.radians(angle)
+            # Match the sun glyph: 0 right, 90 down, 270 up.
+            x0 = cx + int(sun_r * inner * math.cos(rad))
+            y0 = horizon_y + int(sun_r * inner * math.sin(rad))
+            x1 = cx + int(r * outer * math.cos(rad))
+            y1 = horizon_y + int(r * outer * math.sin(rad))
+            if y1 > horizon_y:
+                continue
+            draw.line((x0, y0, x1, y1), fill=colour, width=max(2, w))
     else:  # storm
         draw_weather_glyph(draw, cx, cy - int(r * 0.2), int(r * 0.7), "cloud")
         bolt = [
@@ -469,10 +573,24 @@ def render_weather(draw, item, weather, width, height, short, fitted,
         sunrise = weather.get("sunrise") or ""
         sunset = weather.get("sunset") or ""
         if sunrise or sunset:
+            # Vector sunrise/sunset glyphs beside the times -- replaces the
+            # old ↑/↓ arrows which read as decoration rather than sun events.
             sun_px = max(7, item["size"] * short * 0.38)
-            sun_line = "\u2191%s  \u2193%s" % (sunrise or "--:--",
-                                             sunset or "--:--")
-            rects.append(put(text_x, cursor, sun_line, sun_px, label_colour))
+            icon_r = max(5, int(sun_px * 0.55))
+            gap = max(4, int(sun_px * 0.3))
+            pair_gap = max(10, int(sun_px * 0.85))
+            x = text_x
+            icon_cy = cursor + max(icon_r, sun_px * 0.55)
+            for kind, label in (("sunrise", sunrise or "--:--"),
+                                ("sunset", sunset or "--:--")):
+                draw_weather_glyph(draw, int(x + icon_r), int(icon_cy),
+                                   icon_r, kind)
+                rects.append((x, icon_cy - icon_r - 1,
+                              x + 2 * icon_r, icon_cy + icon_r + 1))
+                x += 2 * icon_r + gap
+                box = put(x, cursor, label, sun_px, label_colour)
+                rects.append(box)
+                x = box[2] + pair_gap
     else:
         try:
             count = max(1, min(7, int(fmt)))
