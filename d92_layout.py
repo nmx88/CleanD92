@@ -122,6 +122,10 @@ def normalise(item, index=0):
             clean["format"] = "now"
         else:
             clean["format"] = fmt
+        # Per-item place override (text) is capped at now / 1 day so a second
+        # city never silently eats a week of bandwidth on the strip.
+        if (clean.get("text") or "").strip() and clean["format"] not in ("now", "1"):
+            clean["format"] = "now"
     return clean
 
 
@@ -513,7 +517,9 @@ def render(img, items, values, fitted, text_height, translucent=False):
 
     for item in items:
         if item["type"] == "weather":
-            box = render_weather(draw, item, values.get("weather"),
+            wmap = values.get("weather_map") or {}
+            weather = wmap.get(item["id"]) or values.get("weather")
+            box = render_weather(draw, item, weather,
                                  width, height, short, fitted, text_height,
                                  translucent=translucent)
             if box:

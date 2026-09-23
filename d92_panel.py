@@ -687,22 +687,35 @@ def start_lhm_poller():
 WEATHER_POLL = 20 * 60      # seconds between refreshes
 WEATHER_TIMEOUT = 8.0
 
-_weather_cache = {
-    "t": 0.0,
-    "place_key": "",
-    "data": None,             # dict for layout.render_weather, or None
-    "error": "",
-}
+_weather_entries = {}          # place_key -> {data, error, t}
 _weather_lock = threading.Lock()
 _weather_started = False
 _weather_invalidate = False   # set from apply_patch without taking _weather_lock
 
 
-def weather_snapshot():
-    """Non-blocking view of the last forecast. Never raises."""
+def _weather_key(place, country, units, lang):
+    name, code = _parse_weather_query(place, country)
+    lang = "en" if lang == "en" else "el"
+    return "%s|%s|%s|%s" % (name.lower(), code, units, lang), name, code
+
+
+def weather_snapshot(place_key=None):
+    """Non-blocking view of a forecast entry. Never raises.
+
+    With no key, returns the most recently updated entry (handy for the
+    Refresh button). With a key, returns that place only."""
     with _weather_lock:
-        data = dict(_weather_cache["data"]) if _weather_cache["data"] else None
-        return data, _weather_cache["error"], _weather_cache["t"]
+        if place_key:
+            entry = _weather_entries.get(place_key) or {}
+            data = dict(entry["data"]) if entry.get("data") else None
+            return data, entry.get("error", ""), entry.get("t", 0.0)
+        if not _weather_entries:
+            return None, "", 0.0
+        key = max(_weather_entries,
+                  key=lambda k: _weather_entries[k].get("t", 0.0))
+        entry = _weather_entries[key]
+        data = dict(entry["data"]) if entry.get("data") else None
+        return data, entry.get("error", ""), entry.get("t", 0.0)
 
 
 def _parse_weather_query(place, country):
@@ -756,9 +769,10 @@ def fetch_weather(place, country="GR", units="C", lang="el"):
     name, country = _parse_weather_query(place, country)
     lang = "en" if lang == "en" else "el"
     if not name:
+        key, _, _ = _weather_key(place, country, units, lang)
         with _weather_lock:
-            _weather_cache.update({"t": time.monotonic(), "data": None,
-                                   "error": "no place set", "place_key": ""})
+            _weather_entries[key] = {
+                "t": time.monotonic(), "data": None, "error": "no place set"}
         return None
 
     place_key = "%s|%s|%s|%s" % (name.lower(), country, units, lang)
@@ -839,14 +853,14 @@ def fetch_weather(place, country="GR", units="C", lang="el"):
             "daily": days,
         }
         with _weather_lock:
-            _weather_cache.update({"t": time.monotonic(), "data": data,
-                                   "error": "", "place_key": place_key})
+            _weather_entries[place_key] = {
+                "t": time.monotonic(), "data": data, "error": ""}
         return data
     except Exception as exc:
         with _weather_lock:
-            _weather_cache.update({"t": time.monotonic(), "data": None,
-                                   "error": str(exc)[:120],
-                                   "place_key": place_key})
+            _weather_entries[place_key] = {
+                "t": time.monotonic(), "data": None,
+                "error": str(exc)[:120]}
         return None
 
 
@@ -861,23 +875,35 @@ def weather_poller():
             stopping = runtime["stop"]
         if stopping:
             return
-        # Only hit the network when a layout actually shows weather -- keeps
-        # offline / first-run machines from paying for a feature they unused.
-        needed = any(i.get("type") == "weather" for i in items)
-        if needed and (place or "").strip():
+        weather_items = [i for i in items if i.get("type") == "weather"]
+        if weather_items:
             global _weather_invalidate
             force = _weather_invalidate
             if force:
                 _weather_invalidate = False
-            name, code = _parse_weather_query(place, country)
-            key = "%s|%s|%s|%s" % (name.lower(), code, units, lang)
-            with _weather_lock:
-                fresh = (not force
-                         and _weather_cache["place_key"] == key
-                         and _weather_cache["data"]
-                         and time.monotonic() - _weather_cache["t"] < WEATHER_POLL)
-            if not fresh:
-                fetch_weather(place, country, units, lang)
+            # Primary place plus every per-item override (item.text).
+            targets = []
+            if (place or "").strip():
+                targets.append((place, country))
+            for item in weather_items:
+                override = (item.get("text") or "").strip()
+                if override:
+                    # Override may embed its own ", CC"; empty country bias.
+                    targets.append((override, ""))
+            seen = set()
+            for target_place, target_country in targets:
+                key, name, _ = _weather_key(
+                    target_place, target_country, units, lang)
+                if not name or key in seen:
+                    continue
+                seen.add(key)
+                with _weather_lock:
+                    entry = _weather_entries.get(key) or {}
+                    fresh = (not force
+                             and entry.get("data")
+                             and time.monotonic() - entry.get("t", 0) < WEATHER_POLL)
+                if not fresh:
+                    fetch_weather(target_place, target_country, units, lang)
         time.sleep(5)    # notice place / item edits quickly; fetch stays gated
 
 
@@ -1049,16 +1075,19 @@ def metric_values(cfg, filename=None):
                     and key not in values:
                 values[key] = (key.upper().replace("_", " ")[:12], placeholder)
 
-    # Weather: structured blob for layout.render_weather. Placeholder keeps
-    # the item selectable while the poller is catching up or offline.
-    if any(i.get("type") == "weather" for i in cfg.get("items") or []):
-        snap, err, stamp = weather_snapshot()
-        if snap:
-            values["weather"] = snap
-        else:
-            place = (cfg.get("weather_place") or "weather").strip() or "weather"
-            if "," not in place and cfg.get("weather_country"):
-                place = "%s, %s" % (place, cfg["weather_country"])
+    # Weather: per-item blob so a second place override can share the canvas
+    # with the primary city. Placeholder keeps the item selectable while the
+    # poller is catching up or offline.
+    weather_items = [i for i in (cfg.get("items") or [])
+                     if i.get("type") == "weather"]
+    if weather_items:
+        units = cfg.get("weather_units", "C")
+        lang = cfg.get("weather_lang", "el")
+        primary = (cfg.get("weather_place") or "").strip()
+        primary_country = cfg.get("weather_country", "GR")
+        weather_map = {}
+
+        def _placeholder(label, err, stamp):
             if not stamp:
                 note = "reading\u2026"
             elif err:
@@ -1071,13 +1100,30 @@ def metric_values(cfg, filename=None):
                     note = "no data"
             else:
                 note = "no data"
-            values["weather"] = {
-                "place": place[:28],
+            return {
+                "place": (label or "weather")[:28],
                 "temp": note,
                 "code": 0,
                 "is_day": True,
                 "daily": [{"name": "\u2014", "code": 0, "temps": note}] * 3,
             }
+
+        for item in weather_items:
+            override = (item.get("text") or "").strip()
+            if override:
+                key, _, _ = _weather_key(override, "", units, lang)
+                label = override
+            else:
+                key, _, _ = _weather_key(primary, primary_country, units, lang)
+                label = primary or "weather"
+                if "," not in label and primary_country:
+                    label = "%s, %s" % (label, primary_country)
+            snap, err, stamp = weather_snapshot(key)
+            weather_map[item["id"]] = (snap if snap
+                                       else _placeholder(label, err, stamp))
+        values["weather_map"] = weather_map
+        # Keep a primary `weather` key for any older caller / first item.
+        values["weather"] = weather_map[weather_items[0]["id"]]
     return values
 
 

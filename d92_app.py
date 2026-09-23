@@ -910,14 +910,22 @@ class PanelApp:
             order = [self.prop_format, self.prop_size, self.prop_align,
                      self.prop_colours]
         elif item_type == "weather":
-            order = [self.prop_horizon, self.prop_size, self.prop_align,
-                     self.prop_label, self.prop_colours]
+            order = [self.prop_text, self.prop_horizon, self.prop_size,
+                     self.prop_align, self.prop_label, self.prop_colours]
+            self.prop_text_label.configure(text="Place override")
+            self.prop_text_hint.configure(
+                text="Blank uses the Weather place above. Override is limited "
+                     "to Now or 1 day.")
         elif item_type == "text":
             order = [self.prop_text, self.prop_size, self.prop_align,
                      self.prop_colours]
+            self.prop_text_label.configure(text="Text")
+            self.prop_text_hint.configure(text="")
         elif item_type == "filename":
             order = [self.prop_text, self.prop_size, self.prop_align,
                      self.prop_label, self.prop_colours]
+            self.prop_text_label.configure(text="Text")
+            self.prop_text_hint.configure(text="")
         for frame in order:
             frame.pack(fill="x", pady=(8, 0) if frame is not order[0] else (0, 0))
 
@@ -1047,6 +1055,13 @@ class PanelApp:
                 self.item_source.set(shown[0] if shown else item["source"])
                 self.item_text.set(item["text"])
                 self.item_format.set(item["format"])
+                # Override places only offer now / 1 day in the combobox.
+                if item["type"] == "weather" and (item.get("text") or "").strip():
+                    allowed = ("now", "1")
+                else:
+                    allowed = layout.WEATHER_FORMATS
+                self.horizon_box.configure(
+                    values=[self.horizon_labels[k] for k in allowed])
                 self.item_horizon.set(
                     self.horizon_labels.get(item["format"], "Now"))
                 self.item_align.set(item["align"])
