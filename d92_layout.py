@@ -42,8 +42,10 @@ ITEM_TYPES = {
 
 # Weather item `format` chooses how much forecast to draw. The place and
 # units live in shared state, not on the item, so one city drives every
-# weather readout on the canvas.
-WEATHER_FORMATS = ("now", "3day", "week")
+# weather readout on the canvas (unless the item overrides via text).
+WEATHER_FORMATS = ("now", "1", "2", "3", "4", "5", "6", "7")
+# Older presets used these names; normalise() rewrites them.
+_WEATHER_FORMAT_ALIASES = {"3day": "3", "week": "7"}
 
 # A readout's source is a key into the value dict the host supplies. The set
 # is dynamic -- one entry per fixed drive, one per GPU LibreHardwareMonitor
@@ -115,6 +117,7 @@ def normalise(item, index=0):
     clean["format"] = str(clean["format"] or "")[:40]
     if clean["type"] == "weather":
         fmt = clean["format"].lower().strip()
+        fmt = _WEATHER_FORMAT_ALIASES.get(fmt, fmt)
         if fmt not in WEATHER_FORMATS:
             clean["format"] = "now"
         else:
@@ -448,20 +451,26 @@ def render_weather(draw, item, weather, width, height, short, fitted,
             rects.append(put(text_x, top + temp_px * 0.95, place,
                              label_px, label_colour))
     else:
-        days = weather.get("daily") or []
-        count = 7 if fmt == "week" else 3
-        days = days[:count]
+        try:
+            count = max(1, min(7, int(fmt)))
+        except (TypeError, ValueError):
+            count = 3
+        days = (weather.get("daily") or [])[:count]
         if not days:
             return None
-        col_w = span / max(1, len(days))
-        glyph_r = max(6, min(col_w * 0.22, item["size"] * short * 0.28))
-        name_px = max(7, item["size"] * short * 0.35)
-        temp_px = max(8, item["size"] * short * 0.42)
+        # Tighter packing for few days; shrink glyphs when squeezing a week.
+        gap = short * (0.008 if count <= 3 else 0.004)
+        usable = max(40.0, span - gap * max(0, count - 1))
+        col_w = usable / count
+        shrink = 1.0 if count <= 3 else (0.85 if count <= 5 else 0.7)
+        glyph_r = max(5, min(col_w * 0.28, item["size"] * short * 0.28) * shrink)
+        name_px = max(6, item["size"] * short * 0.32 * shrink)
+        temp_px = max(7, item["size"] * short * 0.38 * shrink)
         for index, day in enumerate(days):
-            col_left = left + index * col_w
+            col_left = left + index * (col_w + gap)
             cx = col_left + col_w / 2.0
             name = day.get("name") or ""
-            font = fitted(name, col_w * 0.9, name_px)
+            font = fitted(name, col_w * 0.95, name_px)
             box = font.getbbox(name) if hasattr(font, "getbbox") else (0, 0, 0, 0)
             nw = box[2] - box[0]
             nx = cx - nw / 2.0
@@ -470,18 +479,17 @@ def render_weather(draw, item, weather, width, height, short, fitted,
                     draw.text((nx + dx, top + dy), name, font=font, fill=halo)
             draw.text((nx, top), name, font=font, fill=label_colour)
             rects.append((nx, top, nx + nw, top + text_height(font, name)))
-            gy = top + name_px * 1.15 + glyph_r
-            # Daily icons use daytime glyphs -- each column is a calendar day.
+            gy = top + name_px * 1.1 + glyph_r
             draw_weather_glyph(draw, cx, gy, glyph_r,
                                weather_glyph_kind(day.get("code"), is_day=True))
             rects.append((cx - glyph_r, gy - glyph_r,
                           cx + glyph_r, gy + glyph_r))
             temps = day.get("temps") or ""
-            font = fitted(temps, col_w * 0.95, temp_px)
+            font = fitted(temps, col_w * 0.98, temp_px)
             box = font.getbbox(temps) if hasattr(font, "getbbox") else (0, 0, 0, 0)
             tw = box[2] - box[0]
             tx = cx - tw / 2.0
-            ty = gy + glyph_r + 4
+            ty = gy + glyph_r + 3
             if halo:
                 for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
                     draw.text((tx + dx, ty + dy), temps, font=font, fill=halo)

@@ -365,7 +365,7 @@ class PanelApp:
                         lambda e: self.edit(text=self.item_text.get()))
 
         self.prop_format = ttk.Frame(self.fields_host)
-        ttk.Label(self.prop_format, text="Time format / weather (now, 3day, week)",
+        ttk.Label(self.prop_format, text="Time format (clock and date)",
                   style="Dim.TLabel").pack(anchor="w")
         self.item_format = tk.StringVar()
         fmt = ttk.Entry(self.prop_format, textvariable=self.item_format)
@@ -373,6 +373,23 @@ class PanelApp:
         fmt.bind("<Return>", lambda e: self.edit(format=self.item_format.get()))
         fmt.bind("<FocusOut>",
                  lambda e: self.edit(format=self.item_format.get()))
+
+        self.prop_horizon = ttk.Frame(self.fields_host)
+        ttk.Label(self.prop_horizon, text="Forecast horizon",
+                  style="Dim.TLabel").pack(anchor="w")
+        self.item_horizon = tk.StringVar()
+        self.horizon_labels = {
+            "now": "Now",
+            "1": "1 day", "2": "2 days", "3": "3 days", "4": "4 days",
+            "5": "5 days", "6": "6 days", "7": "7 days",
+        }
+        self.horizon_values = {v: k for k, v in self.horizon_labels.items()}
+        self.horizon_box = ttk.Combobox(
+            self.prop_horizon, textvariable=self.item_horizon, state="readonly",
+            values=[self.horizon_labels[k] for k in layout.WEATHER_FORMATS])
+        self.horizon_box.pack(fill="x")
+        self.horizon_box.bind("<<ComboboxSelected>>", lambda e: self.edit(
+            format=self.horizon_values.get(self.item_horizon.get(), "now")))
 
         self.prop_size = ttk.Frame(self.fields_host)
         self.item_size = self._item_slider(self.prop_size, "Size", 2, 150,
@@ -880,8 +897,8 @@ class PanelApp:
     def _sync_prop_widgets(self, item_type):
         """Show only the fields that the selected item type uses."""
         for frame in (self.prop_source, self.prop_text, self.prop_format,
-                      self.prop_size, self.prop_align, self.prop_label,
-                      self.prop_colours):
+                      self.prop_horizon, self.prop_size, self.prop_align,
+                      self.prop_label, self.prop_colours):
             frame.pack_forget()
         if not item_type:
             return
@@ -893,7 +910,7 @@ class PanelApp:
             order = [self.prop_format, self.prop_size, self.prop_align,
                      self.prop_colours]
         elif item_type == "weather":
-            order = [self.prop_format, self.prop_size, self.prop_align,
+            order = [self.prop_horizon, self.prop_size, self.prop_align,
                      self.prop_label, self.prop_colours]
         elif item_type == "text":
             order = [self.prop_text, self.prop_size, self.prop_align,
@@ -1030,6 +1047,8 @@ class PanelApp:
                 self.item_source.set(shown[0] if shown else item["source"])
                 self.item_text.set(item["text"])
                 self.item_format.set(item["format"])
+                self.item_horizon.set(
+                    self.horizon_labels.get(item["format"], "Now"))
                 self.item_align.set(item["align"])
                 self.item_show_label.set(item["show_label"])
                 var, widget, readout, factor = self.item_size
