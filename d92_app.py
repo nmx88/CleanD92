@@ -216,6 +216,7 @@ class PanelApp:
         self._source(holder)
         self._layout_group(holder)
         self._items_group(holder)
+        self._weather_group(holder)
         self._gpu_group(holder)
         self._panel(holder)
 
@@ -358,7 +359,7 @@ class PanelApp:
                         lambda e: self.edit(text=self.item_text.get()))
 
         self.prop_format = ttk.Frame(self.fields_host)
-        ttk.Label(self.prop_format, text="Time format (clock and date)",
+        ttk.Label(self.prop_format, text="Time format / weather (now, 3day, week)",
                   style="Dim.TLabel").pack(anchor="w")
         self.item_format = tk.StringVar()
         fmt = ttk.Entry(self.prop_format, textvariable=self.item_format)
@@ -416,6 +417,46 @@ class PanelApp:
                   text="One press moves the item by 0.5% of the canvas; hold "
                        "an arrow down and it accelerates. Items stop at the "
                        "canvas edge rather than sliding off it."
+                  ).pack(anchor="w", pady=(6, 0))
+
+    def _weather_group(self, parent):
+        group = ttk.Labelframe(parent, text="Weather", padding=10)
+        group.pack(fill="x", pady=(0, 10))
+        ttk.Label(group, text="Place (city, optional country)",
+                  style="Dim.TLabel").pack(anchor="w")
+        self.weather_place = tk.StringVar()
+        place = ttk.Entry(group, textvariable=self.weather_place)
+        place.pack(fill="x")
+        place.bind("<Return>", lambda e: self.push(
+            weather_place=self.weather_place.get()))
+        place.bind("<FocusOut>", lambda e: self.push(
+            weather_place=self.weather_place.get()))
+
+        ttk.Label(group, text="Country bias (e.g. GR)",
+                  style="Dim.TLabel").pack(anchor="w", pady=(8, 0))
+        self.weather_country = tk.StringVar()
+        country = ttk.Entry(group, textvariable=self.weather_country, width=6)
+        country.pack(anchor="w")
+        country.bind("<Return>", lambda e: self.push(
+            weather_country=self.weather_country.get()))
+        country.bind("<FocusOut>", lambda e: self.push(
+            weather_country=self.weather_country.get()))
+
+        self.weather_units = tk.StringVar()
+        ttk.Label(group, text="Units", style="Dim.TLabel").pack(anchor="w",
+                                                                pady=(8, 0))
+        urow = ttk.Frame(group)
+        urow.pack(fill="x")
+        for label, value in (("Celsius", "C"), ("Fahrenheit", "F")):
+            self._radio(urow, label, value, self.weather_units,
+                        lambda: self.push(weather_units=self.weather_units.get()),
+                        side="left")
+        ttk.Button(group, text="Refresh weather now",
+                   command=self.refresh_weather).pack(fill="x", pady=(8, 0))
+        ttk.Label(group, wraplength=380, style="Dim.TLabel",
+                  text="Uses Open-Meteo (no API key). Add a Weather item under "
+                       "Items; set its format to now, 3day or week. Country "
+                       "bias helps Greek place names resolve correctly."
                   ).pack(anchor="w", pady=(6, 0))
 
     def _gpu_group(self, parent):
@@ -631,13 +672,21 @@ class PanelApp:
 
     def add_item(self):
         items = self.items()
-        fresh = layout.new_item(self.new_type.get(), x=0.05, y=0.05)
+        kind = self.new_type.get()
+        fresh = layout.new_item(kind, x=0.05, y=0.05)
         if fresh["type"] == "text":
             fresh["text"] = "Text"
+        if fresh["type"] == "weather":
+            fresh["format"] = "now"
+            fresh["size"] = 0.22
+            fresh["color"] = "#ebe6d5"
+            fresh["label_color"] = "#8a9bb0"
         items.append(fresh)
         core.apply_patch({"items": items})
         self.selected = fresh["id"]
         self.pull()
+        if fresh["type"] == "weather":
+            self.refresh_weather()
 
     def remove_item(self):
         if not self.selected:
@@ -826,6 +875,9 @@ class PanelApp:
         elif item_type in ("clock", "date"):
             order = [self.prop_format, self.prop_size, self.prop_align,
                      self.prop_colours]
+        elif item_type == "weather":
+            order = [self.prop_format, self.prop_size, self.prop_align,
+                     self.prop_label, self.prop_colours]
         elif item_type == "text":
             order = [self.prop_text, self.prop_size, self.prop_align,
                      self.prop_colours]
@@ -858,6 +910,12 @@ class PanelApp:
             "\u2022 CPU / GPU / disk temperatures need LibreHardwareMonitor "
             "running as administrator with Options \u2192 Remote Web Server "
             "\u2192 Run, then tick Poll LibreHardwareMonitor here.\n"
+            "\n"
+            "Weather\n"
+            "\n"
+            "\u2022 Add a Weather item, set Place (e.g. Galatsi) and country "
+            "bias GR. Format now / 3day / week. Data comes from Open-Meteo; "
+            "nothing is uploaded except the place name lookup.\n"
             "\n"
             "If the panel goes black\n"
             "\n"
@@ -901,6 +959,9 @@ class PanelApp:
             self.show_gpu.set(st["show_gpu"])
             self.hold.set(st["hold"])
             self.slide_shuffle.set(st["slide_shuffle"])
+            self.weather_place.set(st.get("weather_place", ""))
+            self.weather_country.set(st.get("weather_country", "GR"))
+            self.weather_units.set(st.get("weather_units", "C"))
             var, scale, readout = self.brightness
             var.set(st["brightness"])
             scale.set(st["brightness"])
@@ -925,6 +986,8 @@ class PanelApp:
                 kind = layout.ITEM_TYPES[item["type"]]
                 if item["type"] == "stat":
                     detail = item.get("source") or ""
+                elif item["type"] == "weather":
+                    detail = item.get("format") or "now"
                 else:
                     label, value = layout.item_strings(
                         item, {"filename": "\u2026"})
@@ -1038,6 +1101,26 @@ class PanelApp:
         chosen = colorchooser.askcolor(color=current, parent=self.root)[1]
         if chosen:
             self.push(**{key: chosen})
+
+    def refresh_weather(self):
+        """Kick the weather poller immediately (still off the render thread)."""
+        with core.state_lock:
+            place = core.state.get("weather_place", "")
+            country = core.state.get("weather_country", "GR")
+            units = core.state.get("weather_units", "C")
+
+        def work():
+            core._weather_invalidate = True
+            data = core.fetch_weather(place, country, units)
+            if data:
+                msg = "weather: %s %s" % (data.get("place"), data.get("temp"))
+            else:
+                _, err, _ = core.weather_snapshot()
+                msg = "weather: %s" % (err or "failed")
+            with core.state_lock:
+                core.runtime["message"] = msg
+
+        threading.Thread(target=work, daemon=True).start()
 
     def wake(self):
         with core.state_lock:

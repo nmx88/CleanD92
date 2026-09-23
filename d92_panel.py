@@ -95,6 +95,11 @@ state = {
     "slide_shuffle": False,
     "show_gpu": False,        # opt-in: LHM is external and often not running
     "lhm_url": "http://localhost:8085/data.json",
+    # Open-Meteo, no API key. Place is free text; country biases geocoding
+    # toward Greece when the name is ambiguous (e.g. "Athens").
+    "weather_place": "Galatsi",
+    "weather_country": "GR",
+    "weather_units": "C",     # "C" | "F"
     "color_bg": "#080a0e",
     # The layout: a list of positioned items. See d92_layout for the schema.
     "items": layout.normalise_all(layout.DEFAULT_PRESETS["Wide dashboard"]),
@@ -566,6 +571,203 @@ def start_lhm_poller():
     threading.Thread(target=lhm_poller, daemon=True).start()
 
 
+# ---------------------------------------------------------------- weather
+# Open-Meteo needs no API key. The poller owns every HTTP call; the render
+# thread only reads weather_snapshot(). Poll slowly -- forecasts do not
+# change every frame, and a hung urlopen on the render thread blacks the panel.
+
+WEATHER_POLL = 20 * 60      # seconds between refreshes
+WEATHER_TIMEOUT = 8.0
+
+_weather_cache = {
+    "t": 0.0,
+    "place_key": "",
+    "data": None,             # dict for layout.render_weather, or None
+    "error": "",
+}
+_weather_lock = threading.Lock()
+_weather_started = False
+_weather_invalidate = False   # set from apply_patch without taking _weather_lock
+
+
+def weather_snapshot():
+    """Non-blocking view of the last forecast. Never raises."""
+    with _weather_lock:
+        data = dict(_weather_cache["data"]) if _weather_cache["data"] else None
+        return data, _weather_cache["error"], _weather_cache["t"]
+
+
+def _parse_weather_query(place, country):
+    """'Galatsi, GR' -> ('Galatsi', 'GR'). Bare names keep the country bias."""
+    text = (place or "").strip()
+    country = (country or "").strip().upper()[:2]
+    if "," in text:
+        name, _, rest = text.partition(",")
+        code = rest.strip().upper()[:2]
+        if len(code) == 2 and code.isalpha():
+            return name.strip(), code
+        return name.strip(), country
+    return text, country
+
+
+def _format_temp(value, units):
+    try:
+        celsius = float(value)
+    except (TypeError, ValueError):
+        return "--"
+    if units == "F":
+        return "%.0f\u00b0F" % (celsius * 9.0 / 5.0 + 32.0)
+    return "%.0f\u00b0C" % celsius
+
+
+def fetch_weather(place, country="GR", units="C"):
+    """Resolve a place name and pull current + 7-day forecast. BLOCKING."""
+    import urllib.parse
+    import urllib.request
+
+    name, country = _parse_weather_query(place, country)
+    if not name:
+        with _weather_lock:
+            _weather_cache.update({"t": time.monotonic(), "data": None,
+                                   "error": "no place set", "place_key": ""})
+        return None
+
+    place_key = "%s|%s|%s" % (name.lower(), country, units)
+    try:
+        query = {"name": name, "count": 5, "language": "el", "format": "json"}
+        if country:
+            query["countryCode"] = country
+        geo_url = ("https://geocoding-api.open-meteo.com/v1/search?"
+                   + urllib.parse.urlencode(query))
+        with urllib.request.urlopen(geo_url, timeout=WEATHER_TIMEOUT) as resp:
+            geo = json.loads(resp.read().decode("utf-8", "replace"))
+        results = geo.get("results") or []
+        if not results and country:
+            # Retry without the country filter so a mistyped GR still resolves.
+            query.pop("countryCode", None)
+            geo_url = ("https://geocoding-api.open-meteo.com/v1/search?"
+                       + urllib.parse.urlencode(query))
+            with urllib.request.urlopen(geo_url, timeout=WEATHER_TIMEOUT) as resp:
+                geo = json.loads(resp.read().decode("utf-8", "replace"))
+            results = geo.get("results") or []
+        if not results:
+            raise ValueError("place not found")
+
+        # Prefer an exact country match when several names collide.
+        chosen = results[0]
+        if country:
+            for row in results:
+                if (row.get("country_code") or "").upper() == country:
+                    chosen = row
+                    break
+
+        lat = chosen["latitude"]
+        lon = chosen["longitude"]
+        label_bits = [chosen.get("name") or name]
+        admin = chosen.get("admin1") or ""
+        code = (chosen.get("country_code") or country or "").upper()
+        if code:
+            label_bits.append(code)
+        place_label = ", ".join(label_bits)
+        if admin and admin.lower() not in place_label.lower():
+            # Keep strip labels short: "Galatsi, GR" not the full admin chain.
+            pass
+
+        forecast_url = (
+            "https://api.open-meteo.com/v1/forecast?"
+            + urllib.parse.urlencode({
+                "latitude": lat,
+                "longitude": lon,
+                "current": "temperature_2m,weather_code",
+                "daily": "weather_code,temperature_2m_max,temperature_2m_min",
+                "timezone": "auto",
+                "forecast_days": 7,
+            }))
+        with urllib.request.urlopen(forecast_url, timeout=WEATHER_TIMEOUT) as resp:
+            forecast = json.loads(resp.read().decode("utf-8", "replace"))
+
+        current = forecast.get("current") or {}
+        daily = forecast.get("daily") or {}
+        days = []
+        times = daily.get("time") or []
+        codes = daily.get("weather_code") or []
+        highs = daily.get("temperature_2m_max") or []
+        lows = daily.get("temperature_2m_min") or []
+        for index, day in enumerate(times):
+            try:
+                # daily.time is YYYY-MM-DD; weekday in local English short form
+                # is fine on the panel -- Greek locales vary by Windows install.
+                stamp = time.strptime(day, "%Y-%m-%d")
+                day_name = time.strftime("%a", stamp)
+            except (TypeError, ValueError):
+                day_name = day[-5:] if day else "?"
+            code_val = codes[index] if index < len(codes) else 0
+            high = highs[index] if index < len(highs) else None
+            low = lows[index] if index < len(lows) else None
+            days.append({
+                "name": day_name,
+                "code": code_val,
+                "temps": "%s/%s" % (_format_temp(low, units),
+                                    _format_temp(high, units)),
+            })
+
+        data = {
+            "place": place_label[:28],
+            "temp": _format_temp(current.get("temperature_2m"), units),
+            "code": current.get("weather_code", 0),
+            "daily": days,
+        }
+        with _weather_lock:
+            _weather_cache.update({"t": time.monotonic(), "data": data,
+                                   "error": "", "place_key": place_key})
+        return data
+    except Exception as exc:
+        with _weather_lock:
+            _weather_cache.update({"t": time.monotonic(), "data": None,
+                                   "error": str(exc)[:120],
+                                   "place_key": place_key})
+        return None
+
+
+def weather_poller():
+    while True:
+        with state_lock:
+            place = state.get("weather_place", "")
+            country = state.get("weather_country", "GR")
+            units = state.get("weather_units", "C")
+            items = list(state.get("items") or [])
+            stopping = runtime["stop"]
+        if stopping:
+            return
+        # Only hit the network when a layout actually shows weather -- keeps
+        # offline / first-run machines from paying for a feature they unused.
+        needed = any(i.get("type") == "weather" for i in items)
+        if needed and (place or "").strip():
+            global _weather_invalidate
+            force = _weather_invalidate
+            if force:
+                _weather_invalidate = False
+            key = "%s|%s|%s" % (
+                _parse_weather_query(place, country)[0].lower(),
+                _parse_weather_query(place, country)[1], units)
+            with _weather_lock:
+                fresh = (not force
+                         and _weather_cache["place_key"] == key
+                         and _weather_cache["data"]
+                         and time.monotonic() - _weather_cache["t"] < WEATHER_POLL)
+            if not fresh:
+                fetch_weather(place, country, units)
+        time.sleep(5)    # notice place / item edits quickly; fetch stays gated
+
+
+def start_weather_poller():
+    global _weather_started
+    if _weather_started:
+        return
+    _weather_started = True
+    threading.Thread(target=weather_poller, daemon=True).start()
+
+
 def human_bytes(value):
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if value < 1024 or unit == "TB":
@@ -676,6 +878,35 @@ def metric_values(cfg, filename=None):
             if (key.startswith("gpu") or key.endswith("_temp")) \
                     and key not in values:
                 values[key] = (key.upper().replace("_", " ")[:12], placeholder)
+
+    # Weather: structured blob for layout.render_weather. Placeholder keeps
+    # the item selectable while the poller is catching up or offline.
+    if any(i.get("type") == "weather" for i in cfg.get("items") or []):
+        snap, err, stamp = weather_snapshot()
+        if snap:
+            values["weather"] = snap
+        else:
+            place = (cfg.get("weather_place") or "weather").strip() or "weather"
+            if "," not in place and cfg.get("weather_country"):
+                place = "%s, %s" % (place, cfg["weather_country"])
+            if not stamp:
+                note = "reading\u2026"
+            elif err:
+                low = err.lower()
+                if "not found" in low:
+                    note = "no place"
+                elif "timed out" in low or "refused" in low:
+                    note = "offline"
+                else:
+                    note = "no data"
+            else:
+                note = "no data"
+            values["weather"] = {
+                "place": place[:28],
+                "temp": note,
+                "code": 0,
+                "daily": [{"name": "\u2014", "code": 0, "temps": note}] * 3,
+            }
     return values
 
 
@@ -796,6 +1027,7 @@ def render_loop(panel):
     slot_end = 0.0         # when the current slideshow file's turn ends
 
     start_lhm_poller()
+    start_weather_poller()
     runtime["status"] = "streaming"
 
     while True:
@@ -1269,6 +1501,7 @@ COLOR_FIELDS = ("color_bg",)
 
 def apply_patch(patch):
     """Validate and merge a patch into shared state. Returns the new state."""
+    global _weather_invalidate
     with state_lock:
         for key, value in patch.items():
             if key in INT_FIELDS:
@@ -1297,6 +1530,16 @@ def apply_patch(patch):
                 state["lhm_url"] = value.strip()[:300]
             elif key == "show_gpu":
                 state["show_gpu"] = bool(value)
+            elif key == "weather_place" and isinstance(value, str):
+                state["weather_place"] = value.strip()[:80]
+                _weather_invalidate = True
+            elif key == "weather_country" and isinstance(value, str):
+                code = value.strip().upper()[:2]
+                state["weather_country"] = code if code.isalpha() else "GR"
+                _weather_invalidate = True
+            elif key == "weather_units" and value in ("C", "F"):
+                state["weather_units"] = value
+                _weather_invalidate = True
             elif key == "hold":
                 state["hold"] = bool(value)
             elif key == "mode" and value in ("clock", "media", "slideshow"):

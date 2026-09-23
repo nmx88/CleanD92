@@ -23,6 +23,7 @@ drew, which is what makes items draggable in the editor.
 import copy
 import itertools
 import json
+import math
 import os
 import re
 import time
@@ -36,7 +37,13 @@ ITEM_TYPES = {
     "stat": "Readout",
     "text": "Fixed text",
     "filename": "Current file name",
+    "weather": "Weather",
 }
+
+# Weather item `format` chooses how much forecast to draw. The place and
+# units live in shared state, not on the item, so one city drives every
+# weather readout on the canvas.
+WEATHER_FORMATS = ("now", "3day", "week")
 
 # A readout's source is a key into the value dict the host supplies. The set
 # is dynamic -- one entry per fixed drive, one per GPU LibreHardwareMonitor
@@ -106,6 +113,12 @@ def normalise(item, index=0):
     clean["show_label"] = bool(clean["show_label"])
     clean["text"] = str(clean["text"] or "")[:60]
     clean["format"] = str(clean["format"] or "")[:40]
+    if clean["type"] == "weather":
+        fmt = clean["format"].lower().strip()
+        if fmt not in WEATHER_FORMATS:
+            clean["format"] = "now"
+        else:
+            clean["format"] = fmt
     return clean
 
 
@@ -258,7 +271,160 @@ def item_strings(item, values):
             return None, None
         label, value = pair
         return (label if item["show_label"] else None), value
+    if kind == "weather":
+        # Listbox / hit-test label only; render() draws the real glyph.
+        weather = values.get("weather") or {}
+        place = weather.get("place") or "weather"
+        return None, "%s (%s)" % (place, item.get("format") or "now")
     return None, None
+
+
+def weather_glyph_kind(code):
+    """Map Open-Meteo WMO weather codes to a handful of drawable glyphs."""
+    try:
+        code = int(code)
+    except (TypeError, ValueError):
+        code = 0
+    if code == 0:
+        return "sun"
+    if code <= 3:
+        return "cloud"
+    if code in (45, 48):
+        return "fog"
+    if 51 <= code <= 67 or 80 <= code <= 82:
+        return "rain"
+    if 71 <= code <= 77 or 85 <= code <= 86:
+        return "snow"
+    if code >= 95:
+        return "storm"
+    return "cloud"
+
+
+def draw_weather_glyph(draw, cx, cy, radius, kind, colour):
+    """Tiny vector icons -- no image assets, so the exe stays one file."""
+    r = max(4, int(radius))
+    if kind == "sun":
+        draw.ellipse((cx - r, cy - r, cx + r, cy + r), outline=colour, width=2)
+        for angle in range(0, 360, 45):
+            rad = math.radians(angle)
+            x0 = cx + int((r + 2) * math.cos(rad))
+            y0 = cy + int((r + 2) * math.sin(rad))
+            x1 = cx + int((r + 6) * math.cos(rad))
+            y1 = cy + int((r + 6) * math.sin(rad))
+            draw.line((x0, y0, x1, y1), fill=colour, width=2)
+    elif kind == "cloud":
+        draw.ellipse((cx - r, cy - r // 2, cx + r // 2, cy + r),
+                     outline=colour, width=2)
+        draw.ellipse((cx - r // 3, cy - r, cx + r, cy + r // 2),
+                     outline=colour, width=2)
+    elif kind == "rain":
+        draw_weather_glyph(draw, cx, cy - 2, r * 0.7, "cloud", colour)
+        for dx in (-r // 2, 0, r // 2):
+            draw.line((cx + dx, cy + r // 3, cx + dx - 2, cy + r),
+                      fill=colour, width=2)
+    elif kind == "snow":
+        draw_weather_glyph(draw, cx, cy - 2, r * 0.7, "cloud", colour)
+        for dx in (-r // 2, 0, r // 2):
+            draw.point((cx + dx, cy + r // 2), fill=colour)
+            draw.point((cx + dx, cy + r), fill=colour)
+    elif kind == "fog":
+        for i, dy in enumerate((-r // 2, 0, r // 2)):
+            inset = i * 2
+            draw.line((cx - r + inset, cy + dy, cx + r - inset, cy + dy),
+                      fill=colour, width=2)
+    else:  # storm
+        draw_weather_glyph(draw, cx, cy - 3, r * 0.7, "cloud", colour)
+        draw.polygon([(cx - 2, cy), (cx + 4, cy), (cx - 2, cy + r),
+                      (cx + 2, cy + r // 3), (cx - 4, cy + r // 3)],
+                     outline=colour)
+
+
+def render_weather(draw, item, weather, width, height, short, fitted,
+                   text_height, translucent=False):
+    """Draw a weather item. Returns the pixel box or None."""
+    if not weather:
+        return None
+    left = item["x"] * width
+    top = item["y"] * height
+    span = (item["width"] or (1.0 - item["x"])) * width
+    span = max(40.0, span - short * 0.02)
+    colour = hex_rgb(item["color"], (150, 215, 255))
+    label_colour = hex_rgb(item["label_color"], (110, 125, 150))
+    halo = (0, 0, 0) if translucent else None
+    fmt = item.get("format") or "now"
+    rects = []
+
+    def put(x, y, text, px, fill):
+        font = fitted(text, max(20, span), px)
+        box = font.getbbox(text) if hasattr(font, "getbbox") else (0, 0, 0, 0)
+        drawn = box[2] - box[0]
+        if halo:
+            for dx, dy in ((-2, 0), (2, 0), (0, -2), (0, 2)):
+                draw.text((x + dx, y + dy), text, font=font, fill=halo)
+        draw.text((x, y), text, font=font, fill=fill)
+        return x, y, x + drawn, y + text_height(font, text)
+
+    if fmt == "now":
+        glyph = weather_glyph_kind(weather.get("code"))
+        radius = max(8, item["size"] * short * 0.35)
+        cx = left + radius + 4
+        cy = top + radius + 2
+        draw_weather_glyph(draw, cx, cy, radius, glyph, colour)
+        rects.append((cx - radius - 4, cy - radius - 2,
+                      cx + radius + 4, cy + radius + 4))
+        text_x = cx + radius + 10
+        temp = weather.get("temp") or "--"
+        place = weather.get("place") or ""
+        temp_px = max(10, item["size"] * short)
+        rects.append(put(text_x, top, temp, temp_px, colour))
+        if item["show_label"] and place:
+            label_px = max(8, item["size"] * short * 0.45)
+            rects.append(put(text_x, top + temp_px * 0.95, place,
+                             label_px, label_colour))
+    else:
+        days = weather.get("daily") or []
+        count = 7 if fmt == "week" else 3
+        days = days[:count]
+        if not days:
+            return None
+        col_w = span / max(1, len(days))
+        glyph_r = max(6, min(col_w * 0.22, item["size"] * short * 0.28))
+        name_px = max(7, item["size"] * short * 0.35)
+        temp_px = max(8, item["size"] * short * 0.42)
+        for index, day in enumerate(days):
+            col_left = left + index * col_w
+            cx = col_left + col_w / 2.0
+            name = day.get("name") or ""
+            font = fitted(name, col_w * 0.9, name_px)
+            box = font.getbbox(name) if hasattr(font, "getbbox") else (0, 0, 0, 0)
+            nw = box[2] - box[0]
+            nx = cx - nw / 2.0
+            if halo:
+                for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                    draw.text((nx + dx, top + dy), name, font=font, fill=halo)
+            draw.text((nx, top), name, font=font, fill=label_colour)
+            rects.append((nx, top, nx + nw, top + text_height(font, name)))
+            gy = top + name_px * 1.15 + glyph_r
+            draw_weather_glyph(draw, cx, gy, glyph_r,
+                               weather_glyph_kind(day.get("code")), colour)
+            rects.append((cx - glyph_r, gy - glyph_r,
+                          cx + glyph_r, gy + glyph_r))
+            temps = day.get("temps") or ""
+            font = fitted(temps, col_w * 0.95, temp_px)
+            box = font.getbbox(temps) if hasattr(font, "getbbox") else (0, 0, 0, 0)
+            tw = box[2] - box[0]
+            tx = cx - tw / 2.0
+            ty = gy + glyph_r + 4
+            if halo:
+                for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                    draw.text((tx + dx, ty + dy), temps, font=font, fill=halo)
+            draw.text((tx, ty), temps, font=font, fill=colour)
+            rects.append((tx, ty, tx + tw, ty + text_height(font, temps)))
+
+    if not rects:
+        return None
+    return (min(r[0] for r in rects), min(r[1] for r in rects),
+            max(r[2] for r in rects), max(r[3] for r in rects))
 
 
 def render(img, items, values, fitted, text_height, translucent=False):
@@ -271,6 +437,14 @@ def render(img, items, values, fitted, text_height, translucent=False):
     boxes = {}
 
     for item in items:
+        if item["type"] == "weather":
+            box = render_weather(draw, item, values.get("weather"),
+                                 width, height, short, fitted, text_height,
+                                 translucent=translucent)
+            if box:
+                boxes[item["id"]] = box
+            continue
+
         label, value = item_strings(item, values)
         if not value and not label:
             continue
