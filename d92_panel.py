@@ -178,6 +178,109 @@ def import_media_file(path):
     return name
 
 
+CLIP_EXTENSIONS = (".mp4", ".mov", ".mkv", ".webm", ".avi")
+MAX_CLIP_SECONDS = 12
+MAX_CLIP_BYTES = 100 * 1024 * 1024
+# Cover-fit to the panel strip, 12 fps, 128-colour palette -- matches the
+# recipe in the README. Anything longer is truncated; the panel only shows
+# ~3 fps at the default interval anyway.
+_FFMPEG_VF = (
+    "fps=12,"
+    "scale=1920:462:force_original_aspect_ratio=increase,"
+    "crop=1920:462,"
+    "split[a][b];[a]palettegen=max_colors=128[p];"
+    "[b][p]paletteuse=dither=bayer"
+)
+
+
+def find_ffmpeg():
+    """Path to a system ffmpeg, or None. Never bundled with the exe."""
+    import shutil
+    return shutil.which("ffmpeg")
+
+
+def convert_clip_to_gif(path, seconds=MAX_CLIP_SECONDS):
+    """Transcode a short video into media/*.gif via system ffmpeg.
+
+    Returns the stored GIF filename. Raises ValueError/RuntimeError with a
+    plain message the UI can show. Must not run on the render thread."""
+    import shutil
+    import subprocess
+    import tempfile
+
+    path = os.path.abspath(path)
+    if not os.path.isfile(path):
+        raise ValueError("not a file: %s" % path)
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in CLIP_EXTENSIONS:
+        raise ValueError("unsupported clip type %s (want %s)" % (
+            ext or "(none)", ", ".join(CLIP_EXTENSIONS)))
+    size = os.path.getsize(path)
+    if size > MAX_CLIP_BYTES:
+        raise ValueError("clip is %.0f MB; limit is %d MB" % (
+            size / (1024 * 1024), MAX_CLIP_BYTES // (1024 * 1024)))
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg:
+        raise RuntimeError(
+            "ffmpeg was not found on PATH. Install it from "
+            "https://ffmpeg.org and reopen CleanD92, or convert the clip "
+            "yourself and drop the GIF onto the preview.")
+
+    try:
+        seconds = max(1, min(MAX_CLIP_SECONDS, int(seconds)))
+    except (TypeError, ValueError):
+        seconds = MAX_CLIP_SECONDS
+
+    stem = os.path.splitext(os.path.basename(path))[0]
+    safe = "".join(c for c in stem if c.isalnum() or c in " ._-+()[]")
+    safe = (safe or "clip").strip(" .")[:60]
+    os.makedirs(MEDIA_DIR, exist_ok=True)
+    # Write to a temp file first so a failed ffmpeg run cannot leave a
+    # truncated GIF that the media loader would then try to decode.
+    fd, tmp = tempfile.mkstemp(prefix="cleand92_", suffix=".gif")
+    os.close(fd)
+    try:
+        cmd = [
+            ffmpeg, "-hide_banner", "-loglevel", "error",
+            "-y", "-ss", "0", "-t", str(seconds),
+            "-i", path,
+            "-vf", _FFMPEG_VF,
+            "-loop", "0",
+            tmp,
+        ]
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, timeout=180, check=False)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("ffmpeg timed out after 180s")
+        if proc.returncode != 0 or not os.path.isfile(tmp) \
+                or os.path.getsize(tmp) < 100:
+            err = (proc.stderr or b"").decode("utf-8", "replace").strip()
+            raise RuntimeError(err or "ffmpeg failed (exit %s)" % proc.returncode)
+        # Land it under media/ through the same naming rules as a drop.
+        name = import_media_file(tmp)
+        # import_media_file keeps the temp basename; rename to the clip stem.
+        wanted = safe + ".gif"
+        if name != wanted:
+            src = os.path.join(MEDIA_DIR, name)
+            dest = os.path.join(MEDIA_DIR, wanted)
+            n = 1
+            while os.path.exists(dest) and dest != src:
+                wanted = "%s_%d.gif" % (safe, n)
+                dest = os.path.join(MEDIA_DIR, wanted)
+                n += 1
+            if dest != src:
+                shutil.move(src, dest)
+                name = wanted
+        return name
+    finally:
+        try:
+            if os.path.isfile(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+
+
 def fit_frame(src, width, height, mode):
     """Scale src into width x height. 'cover' crops, 'letterbox' pads black."""
     out = Image.new("RGB", (width, height), (0, 0, 0))

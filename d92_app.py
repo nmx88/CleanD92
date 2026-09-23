@@ -28,7 +28,7 @@ import os
 import sys
 import threading
 import tkinter as tk
-from tkinter import colorchooser, messagebox, ttk
+from tkinter import colorchooser, filedialog, messagebox, ttk
 
 from PIL import Image, ImageTk
 
@@ -247,6 +247,12 @@ class PanelApp:
                    command=self.rescan).pack(fill="x", pady=(6, 0))
         ttk.Button(group, text="Open media folder",
                    command=self.open_folder).pack(fill="x", pady=(6, 0))
+        ttk.Button(group, text="Convert short clip\u2026",
+                   command=self.convert_clip).pack(fill="x", pady=(6, 0))
+        ttk.Label(group, style="Dim.TLabel", wraplength=380,
+                  text="Needs ffmpeg on PATH. Takes the first 12 seconds, "
+                       "crops to 1920\u00d7462, writes a GIF into media/."
+                  ).pack(anchor="w", pady=(4, 0))
 
         # Fit / slideshow controls are packed only when the mode needs them,
         # so first-run Info screen is not buried under GIF knobs.
@@ -900,6 +906,8 @@ class PanelApp:
             "\u2022 Put images and GIFs in the media folder beside the exe "
             "(Open media folder), or drop a file onto the preview. "
             "Ultrawide / 32:9 sources crop cleanly; phone portraits do not.\n"
+            "\u2022 Short MP4/MOV clips can become GIFs via Convert short "
+            "clip\u2026 if ffmpeg is on PATH. The exe does not bundle ffmpeg.\n"
             "\u2022 Info screen works with an empty media folder. Image / "
             "GIF and Slideshow need files there.\n"
             "\n"
@@ -1087,6 +1095,46 @@ class PanelApp:
                 "Drop file",
                 "Could not import:\n" + "\n".join(errors[:6]),
                 parent=self.root)
+
+    def convert_clip(self):
+        """Optional MP4/MOV/... -> GIF via system ffmpeg. Nothing is bundled."""
+        if not core.find_ffmpeg():
+            messagebox.showinfo(
+                "Convert clip",
+                "ffmpeg was not found on PATH.\n\n"
+                "Install it from https://ffmpeg.org, make sure `ffmpeg` "
+                "works in a terminal, then reopen CleanD92.\n\n"
+                "Alternatively convert the clip yourself and drop the GIF "
+                "onto the preview.",
+                parent=self.root)
+            return
+        path = filedialog.askopenfilename(
+            parent=self.root,
+            title="Short clip to convert",
+            filetypes=[
+                ("Video", "*.mp4 *.mov *.mkv *.webm *.avi"),
+                ("All files", "*.*"),
+            ])
+        if not path:
+            return
+        with core.state_lock:
+            core.runtime["message"] = "converting %s \u2026" % (
+                os.path.basename(path),)
+
+        def work():
+            try:
+                name = core.convert_clip_to_gif(path)
+            except (ValueError, RuntimeError, OSError) as exc:
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Convert clip", str(exc), parent=self.root))
+                with core.state_lock:
+                    core.runtime["message"] = "convert failed"
+                return
+            self.root.after(0, lambda: self.push(media=name, mode="media"))
+            with core.state_lock:
+                core.runtime["message"] = "converted %s" % name
+
+        threading.Thread(target=work, daemon=True).start()
 
     def open_folder(self):
         os.makedirs(core.MEDIA_DIR, exist_ok=True)
