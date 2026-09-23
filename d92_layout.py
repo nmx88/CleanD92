@@ -438,7 +438,9 @@ def render_weather(draw, item, weather, width, height, short, fitted,
         draw.text((x, y), text, font=font, fill=fill)
         return x, y, x + drawn, y + text_height(font, text)
 
-    if fmt == "now":
+    if fmt in ("now", "1"):
+        # "1" is today's high/low column-style; for a single day with sun
+        # times we still prefer the compact now layout plus sunrise/sunset.
         is_day = weather.get("is_day", True)
         glyph = weather_glyph_kind(weather.get("code"), is_day=is_day)
         radius = max(8, item["size"] * short * 0.35)
@@ -451,11 +453,20 @@ def render_weather(draw, item, weather, width, height, short, fitted,
         temp = weather.get("temp") or "--"
         place = weather.get("place") or ""
         temp_px = max(10, item["size"] * short)
-        rects.append(put(text_x, top, temp, temp_px, colour))
+        cursor = top
+        rects.append(put(text_x, cursor, temp, temp_px, colour))
+        cursor += temp_px * 0.95
         if item["show_label"] and place:
             label_px = max(8, item["size"] * short * 0.45)
-            rects.append(put(text_x, top + temp_px * 0.95, place,
-                             label_px, label_colour))
+            rects.append(put(text_x, cursor, place, label_px, label_colour))
+            cursor += label_px * 0.95
+        sunrise = weather.get("sunrise") or ""
+        sunset = weather.get("sunset") or ""
+        if sunrise or sunset:
+            sun_px = max(7, item["size"] * short * 0.38)
+            sun_line = "\u2191%s  \u2193%s" % (sunrise or "--:--",
+                                             sunset or "--:--")
+            rects.append(put(text_x, cursor, sun_line, sun_px, label_colour))
     else:
         try:
             count = max(1, min(7, int(fmt)))

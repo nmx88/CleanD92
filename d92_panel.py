@@ -819,7 +819,8 @@ def fetch_weather(place, country="GR", units="C", lang="el"):
                 "latitude": lat,
                 "longitude": lon,
                 "current": "temperature_2m,weather_code,is_day",
-                "daily": "weather_code,temperature_2m_max,temperature_2m_min",
+                "daily": ("weather_code,temperature_2m_max,temperature_2m_min,"
+                          "sunrise,sunset"),
                 "timezone": "auto",
                 "forecast_days": 7,
             }))
@@ -833,6 +834,8 @@ def fetch_weather(place, country="GR", units="C", lang="el"):
         codes = daily.get("weather_code") or []
         highs = daily.get("temperature_2m_max") or []
         lows = daily.get("temperature_2m_min") or []
+        sunrises = daily.get("sunrise") or []
+        sunsets = daily.get("sunset") or []
         for index, day in enumerate(times):
             day_name = _weekday_label(day, lang)
             code_val = codes[index] if index < len(codes) else 0
@@ -845,12 +848,26 @@ def fetch_weather(place, country="GR", units="C", lang="el"):
                                     _format_temp(high, units)),
             })
 
+        def _hhmm(iso):
+            # Open-Meteo returns "2026-09-23T07:13" in the place timezone.
+            if not iso or "T" not in str(iso):
+                return ""
+            try:
+                return str(iso).split("T", 1)[1][:5]
+            except Exception:
+                return ""
+
+        sunrise = _hhmm(sunrises[0]) if sunrises else ""
+        sunset = _hhmm(sunsets[0]) if sunsets else ""
+
         data = {
             "place": place_label[:28],
             "temp": _format_temp(current.get("temperature_2m"), units),
             "code": current.get("weather_code", 0),
             "is_day": bool(current.get("is_day", 1)),
             "timezone": chosen.get("timezone") or "",
+            "sunrise": sunrise,
+            "sunset": sunset,
             "daily": days,
         }
         with _weather_lock:
