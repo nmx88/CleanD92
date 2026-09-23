@@ -26,6 +26,7 @@ analysis = Analysis(
         "psutil",
         "PIL.ImageTk",          # pulled in dynamically by the preview canvas
         "windnd",               # Windows drag-and-drop onto the preview
+        "tzdata",               # zoneinfo database on Windows
         "tkinter",
         "tkinter.ttk",
         "tkinter.colorchooser",

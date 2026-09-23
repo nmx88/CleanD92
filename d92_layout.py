@@ -27,6 +27,7 @@ import math
 import os
 import re
 import time
+from datetime import datetime, timezone
 
 from PIL import ImageDraw
 
@@ -38,6 +39,7 @@ ITEM_TYPES = {
     "text": "Fixed text",
     "filename": "Current file name",
     "weather": "Weather",
+    "worldclock": "World clock",
 }
 
 # Weather item `format` chooses how much forecast to draw. The place and
@@ -506,6 +508,69 @@ def render_weather(draw, item, weather, width, height, short, fitted,
             max(r[2] for r in rects), max(r[3] for r in rects))
 
 
+def render_worldclock(draw, item, info, width, height, short, fitted,
+                      text_height, translucent=False):
+    """Draw city + local wall time + offset vs the host timezone."""
+    if not info:
+        return None
+    left = item["x"] * width
+    top = item["y"] * height
+    span = (item["width"] or (1.0 - item["x"])) * width
+    span = max(40.0, span - short * 0.02)
+    colour = hex_rgb(item["color"], (150, 215, 255))
+    label_colour = hex_rgb(item["label_color"], (110, 125, 150))
+    halo = (0, 0, 0) if translucent else None
+    rects = []
+
+    def put(x, y, text, px, fill):
+        font = fitted(text, max(20, span), px)
+        box = font.getbbox(text) if hasattr(font, "getbbox") else (0, 0, 0, 0)
+        drawn = box[2] - box[0]
+        if halo:
+            for dx, dy in ((-2, 0), (2, 0), (0, -2), (0, 2)):
+                draw.text((x + dx, y + dy), text, font=font, fill=halo)
+        draw.text((x, y), text, font=font, fill=fill)
+        return x, y, x + drawn, y + text_height(font, text)
+
+    label = info.get("label") or item.get("text") or "—"
+    tz_name = info.get("timezone") or ""
+    clock_text = "--:--"
+    delta_text = ""
+    if tz_name:
+        try:
+            from zoneinfo import ZoneInfo
+            here = datetime.now().astimezone()
+            there = here.astimezone(ZoneInfo(tz_name))
+            clock_text = there.strftime("%H:%M")
+            off_here = here.utcoffset() or timezone.utc.utcoffset(None)
+            off_there = there.utcoffset() or timezone.utc.utcoffset(None)
+            hours = int(round((off_there - off_here).total_seconds() / 3600.0))
+            if hours > 0:
+                delta_text = "+%dh" % hours
+            elif hours < 0:
+                delta_text = "\u2212%dh" % abs(hours)  # Unicode minus
+            else:
+                delta_text = "same"
+        except Exception:
+            clock_text = info.get("error") or "no tz"
+    elif info.get("error"):
+        clock_text = info["error"]
+    elif info.get("pending"):
+        clock_text = "reading\u2026"
+
+    time_px = max(10, item["size"] * short)
+    label_px = max(8, item["size"] * short * 0.45)
+    rects.append(put(left, top, clock_text, time_px, colour))
+    if item.get("show_label", True):
+        line = label
+        if delta_text:
+            line = "%s  %s" % (label, delta_text)
+        rects.append(put(left, top + time_px * 0.95, line,
+                         label_px, label_colour))
+    return (min(r[0] for r in rects), min(r[1] for r in rects),
+            max(r[2] for r in rects), max(r[3] for r in rects))
+
+
 def render(img, items, values, fitted, text_height, translucent=False):
     """Draw every item onto img. Returns {item_id: (x0, y0, x1, y1)} in pixel
     coordinates, which the editor uses for hit testing and drag handles."""
@@ -522,6 +587,16 @@ def render(img, items, values, fitted, text_height, translucent=False):
             box = render_weather(draw, item, weather,
                                  width, height, short, fitted, text_height,
                                  translucent=translucent)
+            if box:
+                boxes[item["id"]] = box
+            continue
+
+        if item["type"] == "worldclock":
+            wmap = values.get("worldclock_map") or {}
+            info = wmap.get(item["id"])
+            box = render_worldclock(draw, item, info,
+                                    width, height, short, fitted, text_height,
+                                    translucent=translucent)
             if box:
                 boxes[item["id"]] = box
             continue

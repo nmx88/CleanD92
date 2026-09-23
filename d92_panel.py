@@ -688,6 +688,7 @@ WEATHER_POLL = 20 * 60      # seconds between refreshes
 WEATHER_TIMEOUT = 8.0
 
 _weather_entries = {}          # place_key -> {data, error, t}
+_geo_cache = {}                # query_key -> {label, timezone, error, t}
 _weather_lock = threading.Lock()
 _weather_started = False
 _weather_invalidate = False   # set from apply_patch without taking _weather_lock
@@ -864,6 +865,86 @@ def fetch_weather(place, country="GR", units="C", lang="el"):
         return None
 
 
+def resolve_geo(place, country="", lang="el"):
+    """Geocode a place to an IANA timezone. BLOCKING; cached under _geo_cache.
+
+    Used by world clocks (and available to weather). HTTP stays off the
+    render thread -- the poller calls this."""
+    import urllib.parse
+    import urllib.request
+
+    name, country = _parse_weather_query(place, country)
+    lang = "en" if lang == "en" else "el"
+    if not name:
+        return None
+    key = "%s|%s|%s" % (name.lower(), country, lang)
+    with _weather_lock:
+        hit = _geo_cache.get(key)
+        if hit and hit.get("timezone") and time.monotonic() - hit.get("t", 0) < WEATHER_POLL * 6:
+            return dict(hit)
+    try:
+        query = {"name": name, "count": 5, "language": lang, "format": "json"}
+        if country:
+            query["countryCode"] = country
+        geo_url = ("https://geocoding-api.open-meteo.com/v1/search?"
+                   + urllib.parse.urlencode(query))
+        with urllib.request.urlopen(geo_url, timeout=WEATHER_TIMEOUT) as resp:
+            geo = json.loads(resp.read().decode("utf-8", "replace"))
+        results = geo.get("results") or []
+        if not results and country:
+            query.pop("countryCode", None)
+            geo_url = ("https://geocoding-api.open-meteo.com/v1/search?"
+                       + urllib.parse.urlencode(query))
+            with urllib.request.urlopen(geo_url, timeout=WEATHER_TIMEOUT) as resp:
+                geo = json.loads(resp.read().decode("utf-8", "replace"))
+            results = geo.get("results") or []
+        if not results:
+            raise ValueError("place not found")
+        chosen = results[0]
+        if country:
+            for row in results:
+                if (row.get("country_code") or "").upper() == country:
+                    chosen = row
+                    break
+        bits = [chosen.get("name") or name]
+        code = (chosen.get("country_code") or country or "").upper()
+        if code:
+            bits.append(code)
+        entry = {
+            "t": time.monotonic(),
+            "label": ", ".join(bits)[:28],
+            "timezone": chosen.get("timezone") or "",
+            "error": "",
+        }
+        if not entry["timezone"]:
+            entry["error"] = "no tz"
+        with _weather_lock:
+            _geo_cache[key] = entry
+        return dict(entry)
+    except Exception as exc:
+        entry = {
+            "t": time.monotonic(),
+            "label": name[:28],
+            "timezone": "",
+            "error": str(exc)[:40],
+        }
+        with _weather_lock:
+            _geo_cache[key] = entry
+        return dict(entry)
+
+
+def geo_snapshot(place, country="", lang="el"):
+    """Non-blocking look-up of a cached geocode. Never raises."""
+    name, country = _parse_weather_query(place, country)
+    lang = "en" if lang == "en" else "el"
+    if not name:
+        return None
+    key = "%s|%s|%s" % (name.lower(), country, lang)
+    with _weather_lock:
+        hit = _geo_cache.get(key)
+        return dict(hit) if hit else None
+
+
 def weather_poller():
     while True:
         with state_lock:
@@ -875,12 +956,13 @@ def weather_poller():
             stopping = runtime["stop"]
         if stopping:
             return
+        global _weather_invalidate
+        force = _weather_invalidate
+        if force:
+            _weather_invalidate = False
+
         weather_items = [i for i in items if i.get("type") == "weather"]
         if weather_items:
-            global _weather_invalidate
-            force = _weather_invalidate
-            if force:
-                _weather_invalidate = False
             # Primary place plus every per-item override (item.text).
             targets = []
             if (place or "").strip():
@@ -904,6 +986,20 @@ def weather_poller():
                              and time.monotonic() - entry.get("t", 0) < WEATHER_POLL)
                 if not fresh:
                     fetch_weather(target_place, target_country, units, lang)
+
+        # World clocks only need a timezone from geocode -- no forecast.
+        for item in items:
+            if item.get("type") != "worldclock":
+                continue
+            query = (item.get("text") or "").strip()
+            if not query:
+                continue
+            hit = geo_snapshot(query, "", lang)
+            stale = (force or not hit or not hit.get("timezone")
+                     or time.monotonic() - hit.get("t", 0) > WEATHER_POLL * 6)
+            if stale:
+                resolve_geo(query, "", lang)
+
         time.sleep(5)    # notice place / item edits quickly; fetch stays gated
 
 
@@ -1124,6 +1220,36 @@ def metric_values(cfg, filename=None):
         values["weather_map"] = weather_map
         # Keep a primary `weather` key for any older caller / first item.
         values["weather"] = weather_map[weather_items[0]["id"]]
+
+    # World clocks: timezone comes from the geo cache; wall time is computed
+    # in layout.render_worldclock so it ticks every frame without HTTP.
+    clock_items = [i for i in (cfg.get("items") or [])
+                   if i.get("type") == "worldclock"]
+    if clock_items:
+        lang = cfg.get("weather_lang", "el")
+        wmap = {}
+        for item in clock_items:
+            query = (item.get("text") or "").strip()
+            if not query:
+                wmap[item["id"]] = {
+                    "label": "set city", "timezone": "", "error": "set city"}
+                continue
+            hit = geo_snapshot(query, "", lang)
+            if hit and hit.get("timezone"):
+                wmap[item["id"]] = {
+                    "label": hit.get("label") or query,
+                    "timezone": hit["timezone"],
+                }
+            elif hit and hit.get("error"):
+                wmap[item["id"]] = {
+                    "label": hit.get("label") or query,
+                    "timezone": "",
+                    "error": hit["error"][:20],
+                }
+            else:
+                wmap[item["id"]] = {
+                    "label": query[:28], "timezone": "", "pending": True}
+        values["worldclock_map"] = wmap
     return values
 
 

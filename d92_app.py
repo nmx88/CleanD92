@@ -354,8 +354,9 @@ class PanelApp:
                                           self.item_source.get())))
 
         self.prop_text = ttk.Frame(self.fields_host)
-        ttk.Label(self.prop_text, text="Fixed text / name prefix",
-                  style="Dim.TLabel").pack(anchor="w")
+        self.prop_text_label = ttk.Label(
+            self.prop_text, text="Fixed text / name prefix", style="Dim.TLabel")
+        self.prop_text_label.pack(anchor="w")
         self.item_text = tk.StringVar()
         text_entry = ttk.Entry(self.prop_text, textvariable=self.item_text)
         text_entry.pack(fill="x")
@@ -363,6 +364,9 @@ class PanelApp:
                         lambda e: self.edit(text=self.item_text.get()))
         text_entry.bind("<FocusOut>",
                         lambda e: self.edit(text=self.item_text.get()))
+        self.prop_text_hint = ttk.Label(
+            self.prop_text, wraplength=340, style="Dim.TLabel", text="")
+        self.prop_text_hint.pack(anchor="w", pady=(2, 0))
 
         self.prop_format = ttk.Frame(self.fields_host)
         ttk.Label(self.prop_format, text="Time format (clock and date)",
@@ -715,6 +719,11 @@ class PanelApp:
             fresh["size"] = 0.22
             fresh["color"] = "#ebe6d5"
             fresh["label_color"] = "#8a9bb0"
+        if fresh["type"] == "worldclock":
+            fresh["text"] = "New York, US"
+            fresh["size"] = 0.16
+            fresh["color"] = "#ebe6d5"
+            fresh["label_color"] = "#8a9bb0"
         items.append(fresh)
         core.apply_patch({"items": items})
         self.selected = fresh["id"]
@@ -916,15 +925,22 @@ class PanelApp:
             self.prop_text_hint.configure(
                 text="Blank uses the Weather place above. Override is limited "
                      "to Now or 1 day.")
+        elif item_type == "worldclock":
+            order = [self.prop_text, self.prop_size, self.prop_align,
+                     self.prop_label, self.prop_colours]
+            self.prop_text_label.configure(text="City")
+            self.prop_text_hint.configure(
+                text="e.g. New York, US or Tokyo. Shows local time and the "
+                     "offset from this PC.")
         elif item_type == "text":
             order = [self.prop_text, self.prop_size, self.prop_align,
                      self.prop_colours]
-            self.prop_text_label.configure(text="Text")
+            self.prop_text_label.configure(text="Fixed text / name prefix")
             self.prop_text_hint.configure(text="")
         elif item_type == "filename":
             order = [self.prop_text, self.prop_size, self.prop_align,
                      self.prop_label, self.prop_colours]
-            self.prop_text_label.configure(text="Text")
+            self.prop_text_label.configure(text="Fixed text / name prefix")
             self.prop_text_hint.configure(text="")
         for frame in order:
             frame.pack(fill="x", pady=(8, 0) if frame is not order[0] else (0, 0))
