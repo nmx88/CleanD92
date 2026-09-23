@@ -101,38 +101,39 @@ def main():
     duration = max(30.0, args.minutes * 60.0)
     started = time.monotonic()
     samples = []
-    hold_checked = False
+    phase = 0   # 0 run, 1 holding, 2 applied under hold, 3 released
     print("soak start: %.1f min, slide=%.1fs, files=%d" % (
         duration / 60.0, args.slide, len(names)))
 
     while time.monotonic() - started < duration:
         time.sleep(5.0)
+        elapsed = time.monotonic() - started
         with core.state_lock:
             frames = core.runtime["frames"]
             last_ms = core.runtime["last_ms"]
             status = core.runtime["status"]
             message = core.runtime["message"]
-            # Mid-run: exercise Hold + Apply + mode flip once.
-            if (not hold_checked
-                    and time.monotonic() - started > min(60.0, duration * 0.2)):
+            # One-shot Hold / Apply / mode flip exercise mid-run.
+            if phase == 0 and elapsed > min(60.0, duration * 0.2):
                 core.state["hold"] = True
-                hold_checked = True
+                phase = 1
                 print("  [hold on]")
-            elif hold_checked and core.state["hold"]:
-                if time.monotonic() - started > min(90.0, duration * 0.3):
-                    core.runtime["apply_once"] = True
-                    core.state["mode"] = "clock"
-                    core.runtime["reload_media"] = True
-                    print("  [apply + mode clock under hold]")
-                if time.monotonic() - started > min(120.0, duration * 0.35):
-                    core.state["hold"] = False
-                    core.state["mode"] = "slideshow"
-                    core.runtime["reload_media"] = True
-                    print("  [hold off, back to slideshow]")
+            elif phase == 1 and elapsed > min(90.0, duration * 0.3):
+                core.state["mode"] = "clock"
+                core.runtime["reload_media"] = True
+                core.runtime["apply_once"] = True
+                phase = 2
+                print("  [apply + mode clock under hold]")
+            elif phase == 2 and elapsed > min(120.0, duration * 0.35):
+                core.state["hold"] = False
+                core.state["mode"] = "slideshow"
+                core.runtime["reload_media"] = True
+                phase = 3
+                print("  [hold off, back to slideshow]")
         mem = rss_mb()
         samples.append((last_ms, mem, frames))
         print("t=%4.0fs  frames=%6d  last_ms=%3d  rss=%.1f MB  %s %s" % (
-            time.monotonic() - started, frames, last_ms, mem, status,
+            elapsed, frames, last_ms, mem, status,
             (message or "")[:40]))
         if status == "error":
             break
