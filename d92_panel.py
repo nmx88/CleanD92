@@ -140,6 +140,28 @@ def list_media():
                   if n.lower().endswith(EXTENSIONS))
 
 
+# Render loop must not hit the disk every tick (AGENTS 2.2). A short TTL
+# listing is refreshed from the loop when a slideshow needs a playlist and
+# when coaching the empty-folder case -- not 3 times a second.
+_media_list = {"t": 0.0, "names": []}
+_MEDIA_LIST_TTL = 2.0
+
+
+def list_media_cached(force=False):
+    now = time.monotonic()
+    if (not force and _media_list["names"] is not None
+            and now - _media_list["t"] < _MEDIA_LIST_TTL):
+        return list(_media_list["names"])
+    names = list_media()
+    _media_list["t"] = now
+    _media_list["names"] = names
+    return list(names)
+
+
+def invalidate_media_list():
+    _media_list["t"] = 0.0
+
+
 def import_media_file(path):
     """Copy an external image/GIF into MEDIA_DIR. Returns the stored filename.
 
@@ -180,6 +202,7 @@ def import_media_file(path):
             raise ValueError("too many copies of %s already in media/" % safe)
     import shutil
     shutil.copy2(path, dest)
+    invalidate_media_list()
     return name
 
 
@@ -312,22 +335,29 @@ def load_media(name, width, height, fit, quality=80):
     Very long animations are subsampled to MAX_FRAMES: the skipped frames'
     durations are folded into the frame that is kept, so the animation still
     runs at the right wall-clock speed."""
-    img = Image.open(os.path.join(MEDIA_DIR, name))
-    total = getattr(img, "n_frames", 1) or 1
-    step = max(1, -(-total // MAX_FRAMES))
+    path = os.path.join(MEDIA_DIR, name)
+    img = Image.open(path)
+    try:
+        total = getattr(img, "n_frames", 1) or 1
+        step = max(1, -(-total // MAX_FRAMES))
 
-    frames = []
-    for position, frame in enumerate(ImageSequence.Iterator(img)):
-        duration = max(0.02, (frame.info.get("duration")
-                              or img.info.get("duration") or 100) / 1000.0)
-        if position % step and frames:
-            # folded into the frame we kept, so timing stays honest
-            frames[-1] = (frames[-1][0], frames[-1][1] + duration)
-            continue
-        buf = io.BytesIO()
-        fit_frame(frame, width, height, fit).save(
-            buf, format="JPEG", quality=quality)
-        frames.append((buf.getvalue(), duration))
+        frames = []
+        for position, frame in enumerate(ImageSequence.Iterator(img)):
+            duration = max(0.02, (frame.info.get("duration")
+                                  or img.info.get("duration") or 100) / 1000.0)
+            if position % step and frames:
+                # folded into the frame we kept, so timing stays honest
+                frames[-1] = (frames[-1][0], frames[-1][1] + duration)
+                continue
+            buf = io.BytesIO()
+            fitted = fit_frame(frame, width, height, fit)
+            try:
+                fitted.save(buf, format="JPEG", quality=quality)
+            finally:
+                fitted.close()
+            frames.append((buf.getvalue(), duration))
+    finally:
+        img.close()
 
     if not frames:
         raise ValueError("no frames in %s" % name)
@@ -352,23 +382,35 @@ _loader = {
 
 
 def request_load(name, cfg, size):
-    """Ask the loader thread for `name`. Returns immediately."""
+    """Ask the loader thread for `name`. Returns immediately.
+
+    Always records the latest want. If a load is already in flight for a
+    different file (short slideshow slots), the finishing worker starts the
+    pending one so the loop never sits on a stale want forever."""
     with _loader["lock"]:
-        if _loader["busy"] or _loader["want"] == name:
+        _loader["want"] = name
+        if _loader["busy"]:
             return
         _loader["busy"] = True
-        _loader["want"] = name
+        pending = name
 
-    def work():
-        try:
-            frames, error = cached_media(name, cfg, size), ""
-        except Exception as exc:
-            frames, error = None, str(exc)
-        with _loader["lock"]:
-            _loader["done"] = (name, frames, error)
-            _loader["busy"] = False
+    def work(target):
+        while True:
+            try:
+                frames, error = cached_media(target, cfg, size), ""
+            except Exception as exc:
+                frames, error = None, str(exc)
+            with _loader["lock"]:
+                _loader["done"] = (target, frames, error)
+                nxt = _loader["want"]
+                if nxt and nxt != target:
+                    # Slideshow moved on while we were decoding -- catch up.
+                    target = nxt
+                    continue
+                _loader["busy"] = False
+                return
 
-    threading.Thread(target=work, daemon=True).start()
+    threading.Thread(target=work, args=(pending,), daemon=True).start()
 
 
 def collect_load():
@@ -391,19 +433,21 @@ PREVIEW_LONG_EDGE = 900                # downscale before sending to browser
 
 def cached_media(name, cfg, size):
     """load_media with a frame-budgeted cache, so a slideshow does not
-    re-decode and re-scale the same files on every pass. Canvas size and fit
-    are part of the key, so changing either naturally invalidates entries.
+    re-decode and re-scale the same files on every pass. Canvas size, fit and
+    JPEG quality are part of the key, so changing any of them naturally
+    invalidates entries.
 
     Eviction runs before the new file is admitted and is allowed to empty the
     cache completely -- the earlier version kept one entry back, which meant
     a single very long GIF could never be evicted."""
     width, height = size
-    key = (name, width, height, cfg["fit"])
+    quality = int(cfg.get("quality") or 80)
+    key = (name, width, height, cfg["fit"], quality)
     with _cache_lock:
         if key in _cache:
             return _cache[key]
 
-    frames = load_media(name, width, height, cfg["fit"])
+    frames = load_media(name, width, height, cfg["fit"], quality=quality)
     with _cache_lock:
         while _cache_order and (
                 sum(len(_cache[k]) for k in _cache_order) + len(frames)
@@ -1424,6 +1468,7 @@ def render_loop(panel):
                 playlist, pos, slot_end = [], 0, 0.0
                 clear_cache()
                 reset_loader()
+                invalidate_media_list()
 
             now = time.monotonic()
 
@@ -1431,17 +1476,28 @@ def render_loop(panel):
             finished = collect_load()
             if finished:
                 done_name, done_frames, done_error = finished
-                loaded = done_name          # even on failure, so we stop asking
-                if done_frames:
-                    frames, index, due = done_frames, 0, 0.0
-                    runtime["message"] = "%s -- %d frame(s)%s" % (
-                        done_name, len(done_frames),
-                        "" if cfg["mode"] != "slideshow"
-                        else "  [%d/%d]" % (pos + 1, max(1, len(playlist))))
+                # Accept only if this finish is still what the loop wants.
+                # Short slideshow slots otherwise paint a stale decode.
+                if cfg["mode"] == "media":
+                    accept = cfg.get("media") == done_name
+                elif cfg["mode"] == "slideshow":
+                    accept = (bool(playlist) and pos < len(playlist)
+                              and playlist[pos] == done_name)
                 else:
-                    frames = None
-                    runtime["message"] = "cannot load %s: %s" % (
-                        done_name, done_error)
+                    accept = False
+                if accept:
+                    loaded = done_name    # even on failure, so we stop asking
+                    if done_frames:
+                        frames, index, due = done_frames, 0, 0.0
+                        runtime["message"] = "%s -- %d frame(s)%s" % (
+                            done_name, len(done_frames),
+                            "" if cfg["mode"] != "slideshow"
+                            else "  [%d/%d]" % (
+                                pos + 1, max(1, len(playlist))))
+                    else:
+                        frames = None
+                        runtime["message"] = "cannot load %s: %s" % (
+                            done_name, done_error)
 
             # -- decide which file should be on screen -------------------
             wanted = None
@@ -1449,7 +1505,7 @@ def render_loop(panel):
                 wanted = cfg["media"]
             elif cfg["mode"] == "slideshow":
                 if not playlist:
-                    playlist = list_media()
+                    playlist = list_media_cached()
                     if cfg["slide_shuffle"]:
                         random.shuffle(playlist)
                     pos, slot_end = 0, 0.0
@@ -1470,7 +1526,7 @@ def render_loop(panel):
                         ".gif files in media/, or use Open media folder")
 
             if cfg["mode"] == "media" and not wanted:
-                if not list_media():
+                if not list_media_cached():
                     runtime["message"] = (
                         "media folder is empty -- drop ultrawide .png .jpg "
                         ".gif files in media/, or use Open media folder")
@@ -1494,8 +1550,8 @@ def render_loop(panel):
                     due += frames[index][1]
                     if due < now - 5.0:      # very stale, resynchronise
                         due = now + frames[index][1]
-                canvas = Image.open(io.BytesIO(frames[index][0]))
-                canvas = canvas.convert("RGB")
+                with Image.open(io.BytesIO(frames[index][0])) as decoded:
+                    canvas = decoded.convert("RGB")
                 canvas = draw_info(canvas, cfg, translucent=True,
                                    filename=loaded)
             else:
@@ -1508,27 +1564,37 @@ def render_loop(panel):
                 # The browser sees the authored canvas, not the wire frame:
                 # that is what actually appears on the panel once mounted.
                 shot = canvas.copy()
-                scale = PREVIEW_LONG_EDGE / max(shot.size)
-                if scale < 1:
-                    shot = shot.resize(
-                        (max(1, int(shot.width * scale)),
-                         max(1, int(shot.height * scale))), Image.LANCZOS)
-                buf = io.BytesIO()
-                shot.save(buf, format="JPEG", quality=70)
-                with preview_lock:
-                    preview["jpeg"] = buf.getvalue()
-                    preview["t"] = now
+                try:
+                    scale = PREVIEW_LONG_EDGE / max(shot.size)
+                    if scale < 1:
+                        resized = shot.resize(
+                            (max(1, int(shot.width * scale)),
+                             max(1, int(shot.height * scale))), Image.LANCZOS)
+                        shot.close()
+                        shot = resized
+                    buf = io.BytesIO()
+                    shot.save(buf, format="JPEG", quality=70)
+                    with preview_lock:
+                        preview["jpeg"] = buf.getvalue()
+                        preview["t"] = now
+                finally:
+                    shot.close()
 
             if rotation:
-                canvas = canvas.rotate(rotation, expand=True)
+                rotated = canvas.rotate(rotation, expand=True)
+                canvas.close()
+                canvas = rotated
 
-            if cfg["hold"] and last_jpeg is not None and not apply_once:
-                # Draft mode: the preview above is live, the panel is not.
-                # Still a real push, so the endpoint never goes idle.
-                panel.send_jpeg(last_jpeg)
-            else:
-                last_jpeg = encode(canvas, cfg["quality"])
-                panel.send_jpeg(last_jpeg)
+            try:
+                if cfg["hold"] and last_jpeg is not None and not apply_once:
+                    # Draft mode: the preview above is live, the panel is not.
+                    # Still a real push, so the endpoint never goes idle.
+                    panel.send_jpeg(last_jpeg)
+                else:
+                    last_jpeg = encode(canvas, cfg["quality"])
+                    panel.send_jpeg(last_jpeg)
+            finally:
+                canvas.close()
 
             elapsed = time.monotonic() - started
             runtime["frames"] += 1
@@ -1914,6 +1980,8 @@ def apply_patch(patch):
             elif key == "mode" and value in ("clock", "media", "slideshow"):
                 state["mode"] = value
                 runtime["reload_media"] = True
+                # Hold keeps last_jpeg on the wire until Apply; mode change
+                # alone must not force a push (that would defeat Hold).
             elif key == "fit" and value in ("cover", "letterbox"):
                 state["fit"] = value
                 runtime["reload_media"] = True
