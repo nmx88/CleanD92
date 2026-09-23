@@ -67,6 +67,9 @@ else:
     HERE = os.path.dirname(os.path.abspath(__file__))
 MEDIA_DIR = os.path.join(HERE, "media")
 EXTENSIONS = (".gif", ".png", ".jpg", ".jpeg", ".bmp", ".webp")
+# Soft ceiling for a drop / import. Longer GIFs are fine once they live in
+# media/; this only stops someone dragging a multi-GB file onto the window.
+MAX_IMPORT_BYTES = 80 * 1024 * 1024
 
 HOST = "127.0.0.1"
 PORT = 8092
@@ -125,6 +128,49 @@ def list_media():
         return []
     return sorted(n for n in os.listdir(MEDIA_DIR)
                   if n.lower().endswith(EXTENSIONS))
+
+
+def import_media_file(path):
+    """Copy an external image/GIF into MEDIA_DIR. Returns the stored filename.
+
+    Runs wherever the caller puts it -- never from the render thread. Used by
+    drag-and-drop and by the optional ffmpeg converter. Refuses unknown
+    extensions and oversized files rather than filling the disk."""
+    path = os.path.abspath(path)
+    if not os.path.isfile(path):
+        raise ValueError("not a file: %s" % path)
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in EXTENSIONS:
+        raise ValueError("unsupported type %s (want %s)" % (
+            ext or "(none)", ", ".join(EXTENSIONS)))
+    size = os.path.getsize(path)
+    if size > MAX_IMPORT_BYTES:
+        raise ValueError("file is %.0f MB; limit is %d MB" % (
+            size / (1024 * 1024), MAX_IMPORT_BYTES // (1024 * 1024)))
+    os.makedirs(MEDIA_DIR, exist_ok=True)
+    base = os.path.basename(path)
+    stem, extension = os.path.splitext(base)
+    # Keep names filesystem-safe and short enough for the filename readout.
+    safe = "".join(c for c in stem if c.isalnum() or c in " ._-+()[]")
+    safe = (safe or "media").strip(" .")[:80]
+    name = safe + extension.lower()
+    dest = os.path.join(MEDIA_DIR, name)
+    n = 1
+    while os.path.exists(dest):
+        # Same path dropped twice: reuse rather than cloning duplicates.
+        try:
+            if os.path.samefile(path, dest):
+                return name
+        except OSError:
+            pass
+        name = "%s_%d%s" % (safe, n, extension.lower())
+        dest = os.path.join(MEDIA_DIR, name)
+        n += 1
+        if n > 999:
+            raise ValueError("too many copies of %s already in media/" % safe)
+    import shutil
+    shutil.copy2(path, dest)
+    return name
 
 
 def fit_frame(src, width, height, mode):

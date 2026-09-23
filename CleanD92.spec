@@ -25,11 +25,13 @@ analysis = Analysis(
         "hid",
         "psutil",
         "PIL.ImageTk",          # pulled in dynamically by the preview canvas
+        "windnd",               # Windows drag-and-drop onto the preview
         "tkinter",
         "tkinter.ttk",
         "tkinter.colorchooser",
         "tkinter.simpledialog",
         "tkinter.messagebox",
+        "tkinter.filedialog",
     ],
     hookspath=[],
     hooksconfig={},

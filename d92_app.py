@@ -162,7 +162,7 @@ class PanelApp:
         left.pack(side="left", fill="both", expand=True, padx=(0, 12))
 
         box = ttk.Labelframe(left, text="Preview \u2014 drag items to move "
-                                       "them", padding=8)
+                                       "them, or drop a file here", padding=8)
         box.pack(fill="x")
         self.preview = tk.Canvas(box, bg="#000000", bd=0,
                                  highlightthickness=0, height=200)
@@ -170,10 +170,13 @@ class PanelApp:
         self.preview.bind("<Button-1>", self.on_press)
         self.preview.bind("<B1-Motion>", self.on_drag)
         self.preview.bind("<ButtonRelease-1>", self.on_release)
+        self._hook_file_drop(self.preview)
         ttk.Label(left, text="The authored canvas \u2014 what lands on the "
                              "panel. Click an item to select it, drag to "
-                             "reposition.", style="Dim.TLabel",
-                  wraplength=740).pack(anchor="w", pady=(6, 0))
+                             "reposition. Drop a .png .jpg .gif onto the "
+                             "preview to copy it into media/ and show it.",
+                  style="Dim.TLabel", wraplength=740).pack(anchor="w",
+                                                           pady=(6, 0))
 
         self.status = tk.Label(left, bg="#12261a", fg="#9fe3b6", anchor="w",
                                justify="left", padx=10, pady=8,
@@ -843,8 +846,8 @@ class PanelApp:
             "\u2022 Close the official MiraBox software before opening "
             "CleanD92 \u2014 it holds the USB device open.\n"
             "\u2022 Put images and GIFs in the media folder beside the exe "
-            "(Open media folder). Ultrawide / 32:9 sources crop cleanly; "
-            "phone portraits do not.\n"
+            "(Open media folder), or drop a file onto the preview. "
+            "Ultrawide / 32:9 sources crop cleanly; phone portraits do not.\n"
             "\u2022 Info screen works with an empty media folder. Image / "
             "GIF and Slideshow need files there.\n"
             "\n"
@@ -974,6 +977,53 @@ class PanelApp:
 
     def rescan(self):
         self.pull()
+
+    def _hook_file_drop(self, widget):
+        """Accept Explorer drops on the preview. windnd is Windows-only, which
+        matches this app; if it is missing the drop path is simply absent."""
+        try:
+            import windnd
+        except ImportError:
+            return
+
+        def dropped(files):
+            # windnd delivers bytes paths on a non-UI thread; hop to Tk.
+            paths = []
+            for entry in files or []:
+                if isinstance(entry, bytes):
+                    paths.append(entry.decode(sys.getfilesystemencoding(),
+                                              "surrogateescape"))
+                else:
+                    paths.append(str(entry))
+            if paths:
+                self.root.after(0, self._import_dropped, paths)
+
+        try:
+            windnd.hook_dropfiles(widget, func=dropped)
+        except Exception:
+            pass
+
+    def _import_dropped(self, paths):
+        """Copy the first usable dropped file into media/ and show it."""
+        errors = []
+        for path in paths:
+            try:
+                name = core.import_media_file(path)
+            except ValueError as exc:
+                errors.append("%s: %s" % (os.path.basename(path), exc))
+                continue
+            except OSError as exc:
+                errors.append("%s: %s" % (os.path.basename(path), exc))
+                continue
+            self.push(media=name, mode="media")
+            with core.state_lock:
+                core.runtime["message"] = "imported %s" % name
+            return
+        if errors:
+            messagebox.showerror(
+                "Drop file",
+                "Could not import:\n" + "\n".join(errors[:6]),
+                parent=self.root)
 
     def open_folder(self):
         os.makedirs(core.MEDIA_DIR, exist_ok=True)
