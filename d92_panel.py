@@ -68,7 +68,8 @@ else:
 MEDIA_DIR = os.path.join(HERE, "media")
 SETTINGS_PATH = os.path.join(HERE, "settings.json")
 # Survives restart. Kept small on purpose -- layouts already live in presets/.
-SETTINGS_KEYS = ("weather_place", "weather_country", "weather_units")
+SETTINGS_KEYS = ("weather_place", "weather_country", "weather_units",
+                 "weather_lang")
 EXTENSIONS = (".gif", ".png", ".jpg", ".jpeg", ".bmp", ".webp")
 # Soft ceiling for a drop / import. Longer GIFs are fine once they live in
 # media/; this only stops someone dragging a multi-GB file onto the window.
@@ -103,6 +104,7 @@ state = {
     "weather_place": "Galatsi",
     "weather_country": "GR",
     "weather_units": "C",     # "C" | "F"
+    "weather_lang": "el",     # "el" | "en" -- geocode + weekday labels
     "color_bg": "#080a0e",
     # The layout: a list of positioned items. See d92_layout for the schema.
     "items": layout.normalise_all(layout.DEFAULT_PRESETS["Wide dashboard"]),
@@ -704,9 +706,11 @@ def weather_snapshot():
 
 
 def _parse_weather_query(place, country):
-    """'Galatsi, GR' -> ('Galatsi', 'GR'). Bare names keep the country bias."""
+    """'Galatsi, GR' -> ('Galatsi', 'GR'). Empty country means worldwide."""
     text = (place or "").strip()
     country = (country or "").strip().upper()[:2]
+    if country and not (len(country) == 2 and country.isalpha()):
+        country = ""
     if "," in text:
         name, _, rest = text.partition(",")
         code = rest.strip().upper()[:2]
@@ -726,36 +730,40 @@ def _format_temp(value, units):
     return "%.0f\u00b0C" % celsius
 
 
-# Short Greek weekday labels for the forecast strip. Fixed -- do not take
-# these from the Windows locale; the panel is aimed at Greek users first and
-# strftime("%a") would otherwise flip between Greek and English randomly.
-GREEK_WEEKDAYS = ("Δευ", "Τρι", "Τετ", "Πεμ", "Παρ", "Σαβ", "Κυρ")
+# Weekday labels for the forecast strip. Chosen by weather_lang rather than
+# the Windows locale, so English and Greek stay stable across machines.
+WEEKDAYS = {
+    "el": ("Δευ", "Τρι", "Τετ", "Πεμ", "Παρ", "Σαβ", "Κυρ"),
+    "en": ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"),
+}
 
 
-def _weekday_label(day_iso):
-    """YYYY-MM-DD -> short Greek weekday, or the MM-DD fallback."""
+def _weekday_label(day_iso, lang="el"):
+    """YYYY-MM-DD -> short weekday in `lang`, or the MM-DD fallback."""
+    names = WEEKDAYS.get(lang) or WEEKDAYS["el"]
     try:
         stamp = time.strptime(day_iso, "%Y-%m-%d")
-        return GREEK_WEEKDAYS[stamp.tm_wday]
+        return names[stamp.tm_wday]
     except (TypeError, ValueError):
         return (day_iso or "?")[-5:]
 
 
-def fetch_weather(place, country="GR", units="C"):
+def fetch_weather(place, country="GR", units="C", lang="el"):
     """Resolve a place name and pull current + 7-day forecast. BLOCKING."""
     import urllib.parse
     import urllib.request
 
     name, country = _parse_weather_query(place, country)
+    lang = "en" if lang == "en" else "el"
     if not name:
         with _weather_lock:
             _weather_cache.update({"t": time.monotonic(), "data": None,
                                    "error": "no place set", "place_key": ""})
         return None
 
-    place_key = "%s|%s|%s" % (name.lower(), country, units)
+    place_key = "%s|%s|%s|%s" % (name.lower(), country, units, lang)
     try:
-        query = {"name": name, "count": 5, "language": "el", "format": "json"}
+        query = {"name": name, "count": 5, "language": lang, "format": "json"}
         if country:
             query["countryCode"] = country
         geo_url = ("https://geocoding-api.open-meteo.com/v1/search?"
@@ -764,7 +772,7 @@ def fetch_weather(place, country="GR", units="C"):
             geo = json.loads(resp.read().decode("utf-8", "replace"))
         results = geo.get("results") or []
         if not results and country:
-            # Retry without the country filter so a mistyped GR still resolves.
+            # Retry without the country filter so a mistyped code still resolves.
             query.pop("countryCode", None)
             geo_url = ("https://geocoding-api.open-meteo.com/v1/search?"
                        + urllib.parse.urlencode(query))
@@ -785,14 +793,10 @@ def fetch_weather(place, country="GR", units="C"):
         lat = chosen["latitude"]
         lon = chosen["longitude"]
         label_bits = [chosen.get("name") or name]
-        admin = chosen.get("admin1") or ""
         code = (chosen.get("country_code") or country or "").upper()
         if code:
             label_bits.append(code)
         place_label = ", ".join(label_bits)
-        if admin and admin.lower() not in place_label.lower():
-            # Keep strip labels short: "Galatsi, GR" not the full admin chain.
-            pass
 
         forecast_url = (
             "https://api.open-meteo.com/v1/forecast?"
@@ -815,7 +819,7 @@ def fetch_weather(place, country="GR", units="C"):
         highs = daily.get("temperature_2m_max") or []
         lows = daily.get("temperature_2m_min") or []
         for index, day in enumerate(times):
-            day_name = _weekday_label(day)
+            day_name = _weekday_label(day, lang)
             code_val = codes[index] if index < len(codes) else 0
             high = highs[index] if index < len(highs) else None
             low = lows[index] if index < len(lows) else None
@@ -831,6 +835,7 @@ def fetch_weather(place, country="GR", units="C"):
             "temp": _format_temp(current.get("temperature_2m"), units),
             "code": current.get("weather_code", 0),
             "is_day": bool(current.get("is_day", 1)),
+            "timezone": chosen.get("timezone") or "",
             "daily": days,
         }
         with _weather_lock:
@@ -851,6 +856,7 @@ def weather_poller():
             place = state.get("weather_place", "")
             country = state.get("weather_country", "GR")
             units = state.get("weather_units", "C")
+            lang = state.get("weather_lang", "el")
             items = list(state.get("items") or [])
             stopping = runtime["stop"]
         if stopping:
@@ -863,16 +869,15 @@ def weather_poller():
             force = _weather_invalidate
             if force:
                 _weather_invalidate = False
-            key = "%s|%s|%s" % (
-                _parse_weather_query(place, country)[0].lower(),
-                _parse_weather_query(place, country)[1], units)
+            name, code = _parse_weather_query(place, country)
+            key = "%s|%s|%s|%s" % (name.lower(), code, units, lang)
             with _weather_lock:
                 fresh = (not force
                          and _weather_cache["place_key"] == key
                          and _weather_cache["data"]
                          and time.monotonic() - _weather_cache["t"] < WEATHER_POLL)
             if not fresh:
-                fetch_weather(place, country, units)
+                fetch_weather(place, country, units, lang)
         time.sleep(5)    # notice place / item edits quickly; fetch stays gated
 
 
@@ -901,12 +906,18 @@ def load_settings():
             state["weather_place"] = place.strip()[:80]
         country = data.get("weather_country")
         if isinstance(country, str):
+            # Empty string is allowed: worldwide search, no country bias.
             code = country.strip().upper()[:2]
-            if code.isalpha():
+            if not code:
+                state["weather_country"] = ""
+            elif code.isalpha():
                 state["weather_country"] = code
         units = data.get("weather_units")
         if units in ("C", "F"):
             state["weather_units"] = units
+        lang = data.get("weather_lang")
+        if lang in ("el", "en"):
+            state["weather_lang"] = lang
 
 
 def save_settings():
@@ -1697,11 +1708,16 @@ def apply_patch(patch):
                 weather_dirty = True
             elif key == "weather_country" and isinstance(value, str):
                 code = value.strip().upper()[:2]
-                state["weather_country"] = code if code.isalpha() else "GR"
+                # Blank = no country filter (search worldwide).
+                state["weather_country"] = code if code.isalpha() else ""
                 _weather_invalidate = True
                 weather_dirty = True
             elif key == "weather_units" and value in ("C", "F"):
                 state["weather_units"] = value
+                _weather_invalidate = True
+                weather_dirty = True
+            elif key == "weather_lang" and value in ("el", "en"):
+                state["weather_lang"] = value
                 _weather_invalidate = True
                 weather_dirty = True
             elif key == "hold":

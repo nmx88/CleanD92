@@ -438,7 +438,7 @@ class PanelApp:
         place.bind("<FocusOut>", lambda e: self.push(
             weather_place=self.weather_place.get()))
 
-        ttk.Label(group, text="Country bias (e.g. GR)",
+        ttk.Label(group, text="Country bias (blank = anywhere)",
                   style="Dim.TLabel").pack(anchor="w", pady=(8, 0))
         self.weather_country = tk.StringVar()
         country = ttk.Entry(group, textvariable=self.weather_country, width=6)
@@ -447,6 +447,16 @@ class PanelApp:
             weather_country=self.weather_country.get()))
         country.bind("<FocusOut>", lambda e: self.push(
             weather_country=self.weather_country.get()))
+
+        self.weather_lang = tk.StringVar()
+        ttk.Label(group, text="Language", style="Dim.TLabel").pack(
+            anchor="w", pady=(8, 0))
+        lrow = ttk.Frame(group)
+        lrow.pack(fill="x")
+        for label, value in (("Greek", "el"), ("English", "en")):
+            self._radio(lrow, label, value, self.weather_lang,
+                        lambda: self.push(weather_lang=self.weather_lang.get()),
+                        side="left")
 
         self.weather_units = tk.StringVar()
         ttk.Label(group, text="Units", style="Dim.TLabel").pack(anchor="w",
@@ -461,8 +471,9 @@ class PanelApp:
                    command=self.refresh_weather).pack(fill="x", pady=(8, 0))
         ttk.Label(group, wraplength=380, style="Dim.TLabel",
                   text="Uses Open-Meteo (no API key). Add a Weather item under "
-                       "Items; set its format to now, 3day or week. Place and "
-                       "units are saved in settings.json beside the app."
+                       "Items. Language picks Greek or Latin place names "
+                       "(Γαλάτσι / Galatsi). Leave country blank to search "
+                       "worldwide. Prefs land in settings.json."
                   ).pack(anchor="w", pady=(6, 0))
 
     def _gpu_group(self, parent):
@@ -970,6 +981,7 @@ class PanelApp:
             self.weather_place.set(st.get("weather_place", ""))
             self.weather_country.set(st.get("weather_country", "GR"))
             self.weather_units.set(st.get("weather_units", "C"))
+            self.weather_lang.set(st.get("weather_lang", "el"))
             var, scale, readout = self.brightness
             var.set(st["brightness"])
             scale.set(st["brightness"])
@@ -1156,10 +1168,11 @@ class PanelApp:
             place = core.state.get("weather_place", "")
             country = core.state.get("weather_country", "GR")
             units = core.state.get("weather_units", "C")
+            lang = core.state.get("weather_lang", "el")
 
         def work():
             core._weather_invalidate = True
-            data = core.fetch_weather(place, country, units)
+            data = core.fetch_weather(place, country, units, lang)
             if data:
                 msg = "weather: %s %s" % (data.get("place"), data.get("temp"))
             else:
