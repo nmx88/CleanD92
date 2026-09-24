@@ -7,7 +7,7 @@ firmware identifies itself as `HOTSPOTEKUSB HID DEMO`, USB ID `5548:1011`.
 CleanD92 talks to the panel over its own HID protocol and **installs nothing
 on your system**: no driver, no service, no administrator rights.
 
-![The panel showing a dashboard over a background image](docs/screenshot.png)
+![CleanD92 window: live preview on the left, weather and GPU sensor settings below](docs/screenshot.png)
 
 ## Why this exists
 
@@ -35,6 +35,10 @@ If your PC is rebooting in a loop, see
 - **Info screen** — clock, date, CPU load and temperature, RAM as a percentage
   or in gigabytes, per-drive disk usage and temperature, network up/down
   speed, uptime, and GPU load and temperature for every card.
+- **Weather** — current conditions and a multi-day forecast from Open-Meteo
+  (no API key). Sunrise and sunset sit under the current block; at night the
+  clear-sky icon follows the real moon phase.
+- **World clocks** — another city's local time and offset from yours.
 - **Image / GIF** — a single still or animated file.
 - **Slideshow** — every file in the `media` folder in turn, with a dwell time
   and optional shuffle. Animated GIFs keep animating during their slot.
@@ -191,7 +195,10 @@ this app makes for you.
 The test button lists every sensor source it found and every piece of hardware
 LibreHardwareMonitor reports, which makes a mismatch easy to spot. Each GPU
 appears separately, so a machine with a discrete card and an integrated one
-gets a readout for both.
+gets a readout for both. Matching prefers **CPU Package** (or AMD Tctl),
+**GPU Core** temperature (hot spot only as fallback), and each drive's
+composite or plain temperature under a short model label. Some integrated
+GPUs expose load in LHM but no temperature leaves — those show load only.
 
 | Message | Meaning |
 |---|---|

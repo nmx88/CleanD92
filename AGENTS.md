@@ -251,6 +251,11 @@ maintenance on working software. Prefer small, reversible edits; run
 3. Adjust the keyword matching in `fetch_lhm` against that real tree, for
    CPU package temperature, per-GPU load and temperature, and per-drive
    temperature.
+**Done (this machine):** live tree against i7-12700K + RX 7700 XT + UHD 770
++ four drives. `cpu_temp` ← CPU Package; `gpu0` ← GPU Core load/temp (hot
+spot fallback); Intel iGPU has load only (no temp leaves in LHM); disks use
+Composite/Temperature with distinct model labels. Matching comments in
+`fetch_lhm` name the live sensor strings.
 **Done when:** every readout the layout offers shows a real number.
 **Stop and report.**
 
@@ -258,6 +263,9 @@ maintenance on working software. Prefer small, reversible edits; run
 Nobody who downloads this knows what to do first. Consider: a default preset
 chosen by orientation, a short "no panel found" screen that explains the
 likely causes, and a one-line status when the media folder is empty.
+**Done:** tip to the live Info screen, Vertical swaps in Tall clock only,
+Help/README cover weather and world clocks, empty-media coaching stays in the
+render status line.
 **Done when:** a new user with an empty folder gets something sensible on the
 panel within a minute. **Stop and report.**
 
@@ -266,8 +274,10 @@ Long-run soak with the slideshow, watch `last_ms` and memory. Confirm the
 dropout path reports cleanly rather than hanging. Confirm Hold plus Apply
 behaves across mode changes.
 Harness: `python tools/soak_slideshow.py --minutes 60 --slide 3` (fake
-panel, no HID). A full hour run was paused mid-way — resume when there is
-time; do not treat Phase 3 as done until that soak finishes clean.
+panel, no HID).
+Partial: 20 min PASS — 3427 frames, last_ms min/med/max 11/25/51 (none
+>100), RSS 35.8→40.9 MB (delta +5.1, max 46), Hold/Apply/mode flip OK.
+Full hour still outstanding before calling Phase 3 done.
 **Done when:** an hour of slideshow shows flat memory and no stalls over
 100 ms. **Stop and report.**
 

@@ -49,6 +49,7 @@ import io
 import json
 import os
 import random
+import re
 import sys
 import threading
 import time
@@ -558,6 +559,21 @@ def shorten(name, limit=16):
     return name[:limit].strip()
 
 
+def shorten_disk(name, limit=14):
+    """Keep model tokens that distinguish drives (980 PRO vs 840 EVO).
+
+    Verified against a live LHM tree where four Samsungs otherwise all
+    collapsed to 'Samsung SS' under the generic 10-char shorten."""
+    text = name or ""
+    for prefix in ("Samsung SSD ", "Samsung HDD ", "Samsung ",
+                   "WDC ", "WD ", "Crucial ", "Kingston ", "NVMe "):
+        if text.startswith(prefix):
+            text = text[len(prefix):]
+            break
+    text = re.sub(r"\s+\d+\s*(TB|GB)\s*$", "", text, flags=re.IGNORECASE)
+    return text[:limit].strip() or shorten(name, limit)
+
+
 def fetch_lhm(url):
     """Read sensors from a running LibreHardwareMonitor. BLOCKING.
 
@@ -629,9 +645,15 @@ def fetch_lhm(url):
                 # Prefer GPU Core % over the many D3D engine counters LHM lists.
                 load = pick(found, "%", ("gpu core", "core load", "d3d 3d",
                                           "3d", "load", "usage"))
-                temp = pick(found, "\u00b0", ("hot spot", "hotspot", "gpu core",
-                                              "core", "edge", "temperature"),
-                            reject=("warning", "critical", "limit"))
+                # Core / edge before hot spot -- the strip's single GPU temp
+                # should match the conventional "GPU Temperature" people know
+                # from HWInfo; hotspot stays as fallback (AMD junction).
+                # Live tree (RX 7700 XT): GPU Core, GPU Memory, GPU Hot Spot.
+                # Intel UHD often has load only and no temperature leaves.
+                temp = pick(found, "\u00b0", ("gpu core", "core", "edge",
+                                              "hot spot", "hotspot",
+                                              "temperature"),
+                            reject=("warning", "critical", "limit", "memory"))
                 parts = []
                 if load is not None:
                     parts.append("%.0f%%" % load)
@@ -648,9 +670,11 @@ def fetch_lhm(url):
 
             elif category == "cpu" and not counts["cpu"]:
                 counts["cpu"] += 1
-                # Package first when present; Core Average / Max on modern
-                # Intel trees that only expose per-core and aggregates.
-                temp = pick(found, "\u00b0", ("tctl/tdie", "tctl", "package",
+                # Live Intel tree: CPU Package, Core Average, Core Max,
+                # per-P/E-core, plus Distance to TjMax (rejected). AMD uses
+                # Tctl/Tdie. Package / Tctl first when present.
+                temp = pick(found, "\u00b0", ("tctl/tdie", "tctl", "tdie",
+                                               "cpu package", "package",
                                                "core average", "core max",
                                                "cpu", "temperature"),
                             reject=("warning", "critical", "limit", "distance"))
@@ -660,13 +684,14 @@ def fetch_lhm(url):
             elif category == "storage":
                 index = counts["storage"]
                 counts["storage"] += 1
-                # Composite / plain Temperature before Warning/Critical thresholds.
+                # Live NVMe: Composite Temperature + Temperature #N +
+                # Warning/Critical thresholds. SATA often just Temperature.
                 temp = pick(found, "\u00b0", ("composite temperature",
                                                "temperature",),
                             reject=("warning", "critical", "limit"))
                 if temp is not None:
                     values["disk%d_temp" % index] = (
-                        "%s TEMP" % shorten(name, 10), "%.0f\u00b0C" % temp)
+                        "%s TEMP" % shorten_disk(name), "%.0f\u00b0C" % temp)
             return
         for child in children:
             walk(child, depth + 1)
