@@ -40,7 +40,7 @@ from d92 import D92
 APP_NAME = "CleanD92"
 # Bump with the release tag (CI also stamps version_info.txt from the tag so
 # Windows file Properties cannot drift the way they did at 1.0.0 forever).
-APP_VERSION = "1.4.1"
+APP_VERSION = "1.4.2"
 CREATOR = "nmx88"
 REPO_URL = "https://github.com/nmx88/CleanD92"
 REFRESH_MS = 700          # preview and status refresh
@@ -90,11 +90,16 @@ class PanelApp:
         self._nudge_step = 0.005
         self._pending = None
         self._shot_box = None     # (ox, oy, w, h) of the image on the canvas
+        self._tray = None         # pystray.Icon while withdrawn to the tray
+        self._quitting = False
 
         root.title(app_title())
         root.minsize(980, 620)
         root.configure(bg="#14161b")
         root.protocol("WM_DELETE_WINDOW", self.quit)
+        # Minimize (taskbar button) goes to the notification area; the X still
+        # quits. The render thread keeps pushing frames while we are hidden.
+        root.bind("<Unmap>", self._on_unmap)
 
         self._style()
         self._build()
@@ -1029,7 +1034,11 @@ class PanelApp:
             "dropouts.\n"
             "\n"
             "Hold keeps the panel on its last frame while you edit; Apply "
-            "now pushes one fresh frame."
+            "now pushes one fresh frame.\n"
+            "\n"
+            "Minimise sends the window to the notification area (tray); the "
+            "panel keeps updating. Double-click the tray icon or choose Show "
+            "to bring the window back. The window close button still quits."
         )
         body = tk.Text(win, wrap="word", bg="#1b1f27", fg="#e6e9ef",
                        bd=0, padx=14, pady=12, font=("Segoe UI", 10))
@@ -1391,6 +1400,8 @@ class PanelApp:
         self._after = self.root.after(REFRESH_MS, self.tick)
 
     def quit(self):
+        self._quitting = True
+        self._stop_tray()
         self.stop_nudge()
         # Cancel the pending refresh first: without this the callback fires
         # after destroy() and Tk prints "invalid command name" on exit.
@@ -1410,6 +1421,114 @@ class PanelApp:
         except Exception:
             pass
         self.root.destroy()
+
+    # -- system tray (minimise) -------------------------------------------
+
+    def _on_unmap(self, event):
+        # Only the toplevel's own minimise, not a child Unmap.
+        if event.widget is not self.root or self._quitting:
+            return
+        try:
+            state = self.root.state()
+        except tk.TclError:
+            return
+        if state == "iconic":
+            self.root.after_idle(self._minimize_to_tray)
+
+    def _minimize_to_tray(self):
+        if self._quitting:
+            return
+        # Start the tray icon before withdraw so a missing pystray leaves the
+        # window as a normal taskbar minimise instead of vanishing.
+        if self._tray is None and not self._start_tray():
+            return
+        try:
+            self.root.withdraw()
+        except tk.TclError:
+            pass
+
+    def _tray_image(self):
+        """Load icon.ico for the tray; fall back to a tiny drawn mark."""
+        candidates = []
+        if getattr(sys, "frozen", False):
+            meipass = getattr(sys, "_MEIPASS", None)
+            if meipass:
+                candidates.append(os.path.join(meipass, "icon.ico"))
+            candidates.append(os.path.join(core.HERE, "icon.ico"))
+        here = os.path.dirname(os.path.abspath(__file__))
+        candidates.append(os.path.join(here, "icon.ico"))
+        candidates.append(os.path.join(core.HERE, "icon.ico"))
+        for path in candidates:
+            if not os.path.isfile(path):
+                continue
+            try:
+                img = Image.open(path)
+                img = img.convert("RGBA")
+                img.thumbnail((64, 64), Image.Resampling.LANCZOS)
+                return img
+            except Exception:
+                continue
+        img = Image.new("RGBA", (64, 64), (20, 22, 27, 255))
+        # Simple mark so a missing icon file still shows something visible.
+        from PIL import ImageDraw
+        draw = ImageDraw.Draw(img)
+        draw.ellipse((8, 8, 56, 56), fill=(77, 163, 255, 255))
+        return img
+
+    def _start_tray(self):
+        try:
+            import pystray
+        except ImportError:
+            return False
+        try:
+            icon = pystray.Icon(
+                "CleanD92",
+                self._tray_image(),
+                app_title(),
+                menu=pystray.Menu(
+                    pystray.MenuItem(
+                        "Show", self._restore_from_tray, default=True),
+                    pystray.MenuItem("Quit", self._quit_from_tray),
+                ),
+            )
+        except Exception:
+            return False
+        self._tray = icon
+        # pystray.run blocks; keep it off the Tk thread.
+        threading.Thread(target=icon.run, name="tray", daemon=True).start()
+        return True
+
+    def _stop_tray(self):
+        icon = self._tray
+        self._tray = None
+        if icon is None:
+            return
+        try:
+            icon.stop()
+        except Exception:
+            pass
+
+    def _restore_from_tray(self, _icon=None, _item=None):
+        # Tray callbacks arrive on pystray's thread -- hop back to Tk.
+        def show():
+            self._stop_tray()
+            try:
+                self.root.deiconify()
+                self.root.state("normal")
+                self.root.lift()
+                self.root.focus_force()
+            except tk.TclError:
+                pass
+        try:
+            self.root.after(0, show)
+        except tk.TclError:
+            pass
+
+    def _quit_from_tray(self, _icon=None, _item=None):
+        try:
+            self.root.after(0, self.quit)
+        except tk.TclError:
+            pass
 
 
 # -------------------------------------------------------------------- boot

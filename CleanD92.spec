@@ -20,13 +20,17 @@ analysis = Analysis(
     # nothing to collect by hand: PyInstaller's binary dependency scan picks
     # up whatever DLLs the .pyd links against.
     binaries=[],
-    datas=[],
+    # icon.ico is the window/exe icon; also shipped as data so the tray can
+    # load it when frozen (the EXE version resource is not a filesystem file).
+    datas=[("icon.ico", ".")],
     hiddenimports=[
         "hid",
         "psutil",
         "PIL.ImageTk",          # pulled in dynamically by the preview canvas
         "windnd",               # Windows drag-and-drop onto the preview
         "tzdata",               # zoneinfo database on Windows
+        "pystray",
+        "pystray._win32",       # backend selected at import time
         "tkinter",
         "tkinter.ttk",
         "tkinter.colorchooser",

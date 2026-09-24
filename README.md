@@ -50,6 +50,9 @@ If your PC is rebooting in a loop, see
   mounted flat or on its end.
 - **Hold and Apply** — keep editing while the panel goes on showing the frame
   it already has, then push one frame when you are happy with it.
+- **Minimise to tray** — the minimise button hides the window in the
+  notification area; the panel keeps updating. Double-click the tray icon to
+  restore. Closing the window still quits.
 - **Horizontal or vertical** content, with a 180° flip.
 
 ## Install
@@ -99,9 +102,10 @@ pip install -r requirements.txt
 python d92_app.py
 ```
 
-That pulls in three packages: `hidapi` for USB HID access, `pillow` for image
-work and `psutil` for the system readouts. The window itself uses tkinter,
-which ships with Python.
+That pulls in `hidapi` for USB HID access, `pillow` for image work,
+`psutil` for the system readouts, `pystray` for minimise-to-tray, plus
+`windnd` and `tzdata` on Windows. The window itself uses tkinter, which
+ships with Python.
 
 Other ways to run it:
 

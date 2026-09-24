@@ -228,8 +228,8 @@ that is wiped on exit, so `media/` and `presets/` would vanish every run.
 - Comments explain **why**, especially where the code looks wrong. Every
   invariant above should be defended by a comment at the place it is enforced.
 - No new runtime dependencies without a reason that survives "this has to be
-  one portable exe". Current set: `hidapi`, `pillow`, `psutil`, plus stdlib
-  tkinter.
+  one portable exe". Current set: `hidapi`, `pillow`, `psutil`, `pystray`,
+  `windnd`, `tzdata`, plus stdlib tkinter.
 - UI colours are explicit. The window uses classic `tk.Radiobutton` and
   `tk.Checkbutton` rather than `ttk` for anything with an indicator, because
   the clam theme paints its own hover background and produced white-on-white.
@@ -277,9 +277,9 @@ dropout path reports cleanly rather than hanging. Confirm Hold plus Apply
 behaves across mode changes.
 Harness: `python tools/soak_slideshow.py --minutes 60 --slide 3` (fake
 panel, no HID).
-Partial: 20 min PASS — 3427 frames, last_ms min/med/max 11/25/51 (none
->100), RSS 35.8→40.9 MB (delta +5.1, max 46), Hold/Apply/mode flip OK.
-Full hour still outstanding before calling Phase 3 done.
+**Done:** 60 min PASS — 10279 frames, last_ms min/med/max 10/23/55 (0
+samples >100), RSS 35.7→37.1 MB (delta +1.4, max 46.2). Earlier 20 min
+partial was also PASS; Hold/Apply/mode flip exercised mid-run.
 **Done when:** an hour of slideshow shows flat memory and no stalls over
 100 ms. **Stop and report.**
 
