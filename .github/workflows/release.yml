@@ -24,6 +24,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-build.txt
 
+      - name: Stamp version from tag
+        # Keeps APP_VERSION and Windows file Properties on the same number as
+        # the git tag. Without this, version_info.txt can lag forever (it did
+        # at 1.0.0 through v1.3.0).
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: python tools/stamp_version.py $env:GITHUB_REF_NAME
+
       - name: Build
         run: pyinstaller --noconfirm --clean CleanD92.spec
 

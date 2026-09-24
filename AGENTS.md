@@ -186,8 +186,10 @@ pyinstaller --noconfirm --clean CleanD92.spec
 ```
 
 `dist\CleanD92.exe`, one file, no console, 25–45 MB. Tagging `v*` triggers
-`.github/workflows/release.yml`, which builds on `windows-latest` and attaches
-the exe to a GitHub release.
+`.github/workflows/release.yml`, which stamps `APP_VERSION` /
+`version_info.txt` from the tag, builds on `windows-latest`, and attaches
+the exe to a GitHub release. Bump `APP_VERSION` in `d92_app.py` in the same
+commit when you cut a release so source runs match the tag before CI runs.
 
 When frozen, `d92_panel.HERE` resolves against `sys.executable`, not
 `__file__` — under one-file mode `__file__` points inside a temp directory

@@ -27,6 +27,7 @@ import io
 import os
 import sys
 import threading
+import webbrowser
 import tkinter as tk
 from tkinter import colorchooser, filedialog, messagebox, ttk
 
@@ -37,8 +38,40 @@ import d92_panel as core
 from d92 import D92
 
 APP_NAME = "CleanD92"
+# Bump with the release tag (CI also stamps version_info.txt from the tag so
+# Windows file Properties cannot drift the way they did at 1.0.0 forever).
+APP_VERSION = "1.4.1"
+CREATOR = "nmx88"
+REPO_URL = "https://github.com/nmx88/CleanD92"
 REFRESH_MS = 700          # preview and status refresh
 PREVIEW_MAX_HEIGHT = 320  # tallest the on-screen preview may get
+
+
+def app_title():
+    return "%s  %s" % (APP_NAME, APP_VERSION)
+
+
+def open_repo(_event=None):
+    """Open the GitHub repo. Never raise into the UI."""
+    try:
+        webbrowser.open(REPO_URL)
+    except Exception:
+        pass
+
+
+def creator_link(parent, bg="#14161b", dim="#98a3b6", accent="#7eb8ff"):
+    """'Creator  nmx88' with the name as a clickable repo link.
+
+    Classic tk.Label, not ttk: need an explicit underline and hand cursor,
+    and a disabled Text widget would swallow the click."""
+    row = tk.Frame(parent, bg=bg)
+    tk.Label(row, text="Creator  ", bg=bg, fg=dim,
+             font=("Segoe UI", 9)).pack(side="left")
+    link = tk.Label(row, text=CREATOR, bg=bg, fg=accent,
+                    font=("Segoe UI", 9, "underline"), cursor="hand2")
+    link.pack(side="left")
+    link.bind("<Button-1>", open_repo)
+    return row
 
 
 # --------------------------------------------------------------------- app
@@ -58,7 +91,7 @@ class PanelApp:
         self._pending = None
         self._shot_box = None     # (ox, oy, w, h) of the image on the canvas
 
-        root.title(APP_NAME)
+        root.title(app_title())
         root.minsize(980, 620)
         root.configure(bg="#14161b")
         root.protocol("WM_DELETE_WINDOW", self.quit)
@@ -187,6 +220,9 @@ class PanelApp:
         help_row.pack(fill="x", pady=(8, 0))
         ttk.Button(help_row, text="Help",
                    command=self.show_help).pack(side="left")
+        ttk.Label(help_row, text=app_title(),
+                  style="Dim.TLabel").pack(side="left", padx=(12, 0))
+        creator_link(help_row).pack(side="right")
 
         self.sensors = tk.Text(left, height=11, bg="#12151c", fg="#9aa5b8",
                                bd=0, padx=10, pady=8, wrap="word",
@@ -948,7 +984,7 @@ class PanelApp:
 
     def show_help(self):
         win = tk.Toplevel(self.root)
-        win.title("%s \u2014 Help" % APP_NAME)
+        win.title("%s \u2014 Help" % app_title())
         win.configure(bg="#14161b")
         win.minsize(420, 360)
         text = (
@@ -1000,6 +1036,13 @@ class PanelApp:
         body.pack(fill="both", expand=True, padx=12, pady=12)
         body.insert("1.0", text)
         body.configure(state="disabled")
+        # Version + creator sit outside the scroll text so the link stays
+        # clickable (a disabled Text swallows Button-1).
+        foot = tk.Frame(win, bg="#14161b")
+        foot.pack(fill="x", padx=12, pady=(0, 8))
+        tk.Label(foot, text=app_title(), bg="#14161b", fg="#98a3b6",
+                 font=("Segoe UI", 9)).pack(side="left")
+        creator_link(foot).pack(side="right")
         ttk.Button(win, text="Close", command=win.destroy).pack(pady=(0, 12))
 
     def push(self, **patch):
@@ -1420,7 +1463,7 @@ def no_device_dialog(exc):
     that already succeeded (that path is what blacks the panel)."""
     result = {"retry": False}
     root = tk.Tk()
-    root.title(APP_NAME)
+    root.title(app_title())
     root.configure(bg="#14161b")
     root.minsize(440, 280)
     frame = ttk.Frame(root, padding=16)
@@ -1432,6 +1475,11 @@ def no_device_dialog(exc):
     body.pack(fill="both", expand=True, pady=(10, 12))
     body.insert("1.0", DEVICE_HELP % exc)
     body.configure(state="disabled")
+    meta = tk.Frame(frame, bg="#14161b")
+    meta.pack(fill="x", pady=(0, 10))
+    tk.Label(meta, text=app_title(), bg="#14161b", fg="#98a3b6",
+             font=("Segoe UI", 9)).pack(side="left")
+    creator_link(meta).pack(side="right")
     row = ttk.Frame(frame)
     row.pack(fill="x")
 
