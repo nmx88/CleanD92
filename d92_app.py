@@ -538,7 +538,9 @@ class PanelApp:
                   text="Uses Open-Meteo (no API key). Add a Weather item under "
                        "Items. Language picks Greek or Latin place names "
                        "(Γαλάτσι / Galatsi). Leave country blank to search "
-                       "worldwide. Prefs land in settings.json."
+                       "worldwide. Weather prefs are saved in settings.json "
+                       "for the next launch, and also inside any preset you "
+                       "Save as\u2026."
                   ).pack(anchor="w", pady=(6, 0))
 
     def _gpu_group(self, parent):
@@ -1033,6 +1035,11 @@ class PanelApp:
             "clip\u2026 if ffmpeg is on PATH. The exe does not bundle ffmpeg.\n"
             "\u2022 Info screen works with an empty media folder. Image / "
             "GIF and Slideshow need files there.\n"
+            "\u2022 Save as\u2026 stores a full scene: layout items plus mode, "
+            "quality, interval, orientation, weather, slideshow options and "
+            "LHM settings. Hold is not saved. Built-in presets are layout "
+            "only. settings.json still remembers the last weather place "
+            "across restarts.\n"
             "\n"
             "Temperatures and GPU\n"
             "\n"

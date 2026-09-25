@@ -106,7 +106,13 @@ directly.
 `d92_panel.state` — a plain dict under `state_lock`. Keys: `mode`, `media`,
 `brightness`, `interval_ms`, `layout`, `flip`, `canvas_w/h`, `fit`,
 `quality`, `slide_seconds`, `slide_shuffle`, `show_gpu`, `lhm_url`,
+`weather_place` / `weather_country` / `weather_units` / `weather_lang`,
 `color_bg`, `items`, `preset`, `hold`.
+
+User presets (`presets/*.json`) store `items` plus a `scene` object with every
+tunable above except `hold` and `canvas_w/h`. Built-ins are items-only.
+`settings.json` persists the four weather keys across restarts (also snapshotted
+into a preset when the user saves one).
 
 `d92_panel.runtime` — status, message, frames, last_ms, plus one-shot flags
 the render loop consumes: `wake`, `apply_once`, `reload_media`,

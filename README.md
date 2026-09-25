@@ -78,8 +78,8 @@ On first run you get:
 ```
 CleanD92.exe
 media/        put your .png .jpg .gif .bmp .webp files here
-presets/      your saved layouts, as .json
-settings.json weather place / language / units (created when you edit them)
+presets/      saved scenes (layout + settings), as .json
+settings.json last weather place / language / units (app restart default)
 ```
 
 The panel opens on the **Info** screen (clock and system readouts) even with
