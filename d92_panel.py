@@ -1456,10 +1456,14 @@ def timer_display_map(items):
 NOTIFY_POLL = 4.0
 NOTIFY_TIMEOUT = 14.0
 NOTIFY_DWELL = 30.0       # seconds a toast stays on the strip once seen
-NOTIFY_ALLOW = (
+# Native apps matched on AUMID / display name. Browser toasts are allowed
+# only when the title/body also looks like Gmail (see _notify_allowed).
+NOTIFY_ALLOW_APPS = (
     "viber", "telegram", "outlook", "microsoft.outlook", "hxmail",
-    "mail", "chrome", "msedge", "googlechrome", "firefox", "gmail",
+    "hxoutlook", "mail", "gmail",
 )
+NOTIFY_BROWSER_TOKENS = ("chrome", "msedge", "googlechrome", "firefox", "brave")
+NOTIFY_GMAIL_TOKENS = ("gmail", "google mail", "mail.google")
 
 _notify_cache = {
     "t": 0.0,
@@ -1490,6 +1494,18 @@ def _tool_script(*parts):
 
 def _nowplaying_script():
     return _tool_script("tools", "nowplaying.ps1")
+
+
+def _notify_allowed(aumid, app, title, body):
+    """Keep chat/mail apps; browsers only when the toast looks like Gmail."""
+    blob = (" ".join((aumid or "", app or "", title or "", body or ""))).lower()
+    if "cleand92" in blob:
+        return False
+    if any(token in blob for token in NOTIFY_ALLOW_APPS):
+        return True
+    if any(token in blob for token in NOTIFY_BROWSER_TOKENS):
+        return any(token in blob for token in NOTIFY_GMAIL_TOKENS)
+    return False
 
 
 def register_notify_identity():
@@ -1591,10 +1607,7 @@ def fetch_notifications():
         elif key == "TOAST":
             parts = (value.split("|") + ["", "", "", "", ""])[:5]
             tid, aumid, app, title, body = [p.strip() for p in parts]
-            blob = (" ".join((aumid, app, title, body))).lower()
-            if not any(token in blob for token in NOTIFY_ALLOW):
-                continue
-            if "cleand92" in aumid.lower() or "cleand92" in app.lower():
+            if not _notify_allowed(aumid, app, title, body):
                 continue
             fresh.append({
                 "id": tid[:80],
@@ -1620,7 +1633,15 @@ def fetch_notifications():
 
 
 def notify_snapshot():
-    """Newest allowed toast still within dwell, or None. Never raises."""
+    """Newest allowed toast still within dwell, or None. Never raises.
+
+    When mirroring is off the strip stays blank -- no sticky coaching from an
+    earlier failed poll.
+    """
+    with state_lock:
+        mirroring = bool(state.get("notify_mirror"))
+    if not mirroring:
+        return None
     now = time.monotonic()
     with _notify_lock:
         toasts = list(_notify_cache.get("toasts") or [])
@@ -1634,11 +1655,12 @@ def notify_snapshot():
         }
     if error and not toasts:
         low = error.lower()
-        if "identity" in low or "not registered" in low or "class not" in low:
+        if ("identity" in low or "not registered" in low or "class not" in low
+                or "denied" in low or "capability" in low):
             return {
                 "app": "Notify",
                 "title": "identity needed",
-                "body": "Enable mirroring and register the sparse package",
+                "body": "Use Register sparse identity under Notifications",
             }
         return None
     live = [t for t in toasts
@@ -2662,7 +2684,7 @@ COLOR_FIELDS = ("color_bg",)
 def apply_patch(patch):
     """Validate and merge a patch into shared state. Returns the new state."""
     global _weather_invalidate
-    weather_dirty = False
+    settings_dirty = False
     with state_lock:
         for key, value in patch.items():
             if key in INT_FIELDS:
@@ -2693,25 +2715,25 @@ def apply_patch(patch):
                 state["show_gpu"] = bool(value)
             elif key == "notify_mirror":
                 state["notify_mirror"] = bool(value)
-                weather_dirty = True  # reuse settings flush below
+                settings_dirty = True
             elif key == "weather_place" and isinstance(value, str):
                 state["weather_place"] = value.strip()[:80]
                 _weather_invalidate = True
-                weather_dirty = True
+                settings_dirty = True
             elif key == "weather_country" and isinstance(value, str):
                 code = value.strip().upper()[:2]
                 # Blank = no country filter (search worldwide).
                 state["weather_country"] = code if code.isalpha() else ""
                 _weather_invalidate = True
-                weather_dirty = True
+                settings_dirty = True
             elif key == "weather_units" and value in ("C", "F"):
                 state["weather_units"] = value
                 _weather_invalidate = True
-                weather_dirty = True
+                settings_dirty = True
             elif key == "weather_lang" and value in ("el", "en"):
                 state["weather_lang"] = value
                 _weather_invalidate = True
-                weather_dirty = True
+                settings_dirty = True
             elif key == "hold":
                 state["hold"] = bool(value)
             elif key == "mode" and value in ("clock", "media", "slideshow"):
@@ -2737,9 +2759,8 @@ def apply_patch(patch):
                 state["slide_shuffle"] = bool(value)
                 runtime["reload_media"] = True
         snapshot = dict(state)
-    if weather_dirty:
-        # Persist outside the lock: disk I/O must not stall apply_patch callers
-        # that already hold UI or render-adjacent work.
+    if settings_dirty:
+        # Persist outside the lock: disk I/O must not stall apply_patch callers.
         save_settings()
     return snapshot
 

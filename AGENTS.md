@@ -228,7 +228,9 @@ that is wiped on exit, so `media/` and `presets/` would vanish every run.
   wrong places. See "Adding another device" in the README.
 - Toast mirroring is the only optional identity path: a sparse Appx package
   (`packaging/AppxManifest.xml`) so `UserNotificationListener` can run. It
-  is not a driver or service; everything else stays unpackaged.
+  is not a driver or service; everything else stays unpackaged. Browser
+  toasts are filtered to Gmail-looking content only; registration must not
+  force-shutdown the running app.
 
 ---
 

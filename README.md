@@ -47,8 +47,9 @@ If your PC is rebooting in a loop, see
 - **Volume and battery** — speaker level / mute and laptop battery readouts.
 - **Timer** — countdown item (`25m`, `90s`, …) with Reset in the editor.
 - **Notifications** — optional mirroring of Windows toasts (Viber, Telegram,
-  Outlook, Mail, browser Gmail). Needs a one-time sparse package identity and
-  notification access; not a driver. Enable under Notifications in the window.
+  Outlook, Mail; browser only when the toast looks like Gmail). Needs a
+  one-time sparse package identity and notification access; not a driver.
+  Enable under Notifications in the window.
 - **Preset hotkeys** — Ctrl+1…9 loads the Nth preset while the window is focused.
 - **Image / GIF** — a single still or animated file.
 - **Slideshow** — every file in the `media` folder in turn, with a dwell time

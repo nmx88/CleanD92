@@ -23,6 +23,7 @@ if (-not (Test-Path $manifest)) {
 }
 
 # Tiny placeholder logo required by the schema when registering.
+# Do not use -ForceApplicationShutdown: that can close CleanD92 itself.
 $packDir = Split-Path -Parent $manifest
 $logo = Join-Path $packDir "StoreLogo.png"
 if (-not (Test-Path $logo)) {
@@ -33,7 +34,7 @@ if (-not (Test-Path $logo)) {
 
 try {
     # External location = folder that holds CleanD92.exe (source or dist).
-    Add-AppxPackage -Register $manifest -ExternalLocation $AppDir -ForceApplicationShutdown -ErrorAction Stop
+    Add-AppxPackage -Register $manifest -ExternalLocation $AppDir -ErrorAction Stop
     Write-Output "STATUS=registered"
     Write-Output ("MANIFEST=" + $manifest)
     Write-Output ("EXTERNAL=" + $AppDir)

@@ -591,9 +591,10 @@ class PanelApp:
             group, wraplength=380, style="Dim.TLabel",
             text="Add a Notification item under Items. Mirroring needs a "
                  "one-time sparse package identity (not a driver) and "
-                 "Windows notification access. Filters Viber, Telegram, "
-                 "Outlook, Mail, and browser Gmail toasts. Enable Developer "
-                 "Mode if registration fails."
+                 "Windows notification access. Native Viber / Telegram / "
+                 "Outlook / Mail toasts are shown; browser toasts only when "
+                 "they look like Gmail. Enable Developer Mode if "
+                 "registration fails."
         ).pack(anchor="w", pady=(6, 0))
 
     def _toggle_notify_mirror(self):
@@ -1188,8 +1189,9 @@ class PanelApp:
             "\u2022 Add a Notification item and tick Mirror Windows toasts. "
             "First use registers a sparse package identity (Developer Mode "
             "may be required) and asks for notification access. Shows "
-            "Viber, Telegram, Outlook, Mail and browser Gmail toasts for "
-            "about 30 seconds.\n"
+            "Viber, Telegram, Outlook and Mail toasts; browser toasts only "
+            "when they look like Gmail. About 30 seconds per toast. The "
+            "strip stays blank when mirroring is off.\n"
             "\n"
             "If the panel goes black\n"
             "\n"
