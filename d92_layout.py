@@ -269,7 +269,8 @@ def normalise_scene(raw):
             if value is None or value == "":
                 clean[key] = None
             elif isinstance(value, str):
-                clean[key] = value[:200]
+                # Basename only -- never allow ../ out of media/.
+                clean[key] = os.path.basename(value)[:200] or None
         elif key in ("weather_place", "weather_country", "lhm_url",
                      "color_bg") and isinstance(value, str):
             clean[key] = value[:300] if key == "lhm_url" else value[:80]

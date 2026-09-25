@@ -2,10 +2,10 @@
 """
 d92_panel.py -- control panel for the MiraBox StreamDock D92.
 
-Run this, open http://127.0.0.1:8092 in a browser, and drive the panel from
-there: pick an image or animated GIF, overlay a clock and CPU/RAM readout,
-set brightness and refresh interval. Nothing is uploaded anywhere; media is
-read from the ./media folder next to this script.
+Run this (or `python d92_app.py --web`), then open http://127.0.0.1:8092 on
+this PC or the printed LAN URL on a phone on the same Wi-Fi. The server
+listens on all interfaces when started this way; there is no login, so keep
+it on a trusted network.
 
 Requires d92.py in the same folder, plus:  pip install hidapi pillow psutil
 
@@ -1682,8 +1682,11 @@ def lan_addresses():
             return 90
         if addr.startswith("192.168.56."):
             return 50          # VirtualBox host-only
-        if addr.startswith("172.1") or addr.startswith("172.2"):
-            return 40          # common WSL / Docker ranges
+        parts = addr.split(".")
+        if len(parts) >= 2 and parts[0] == "172" and parts[1].isdigit():
+            second = int(parts[1])
+            if 16 <= second <= 31:
+                return 15      # RFC1918, often WSL/Hyper-V
         if addr.startswith("192.168.") or addr.startswith("10."):
             return 0
         return 20
@@ -2069,7 +2072,14 @@ def apply_patch(patch):
                 state["fit"] = value
                 runtime["reload_media"] = True
             elif key == "media":
-                state["media"] = value or None
+                # Basename only so a crafted path cannot leave media/.
+                if value is None or value == "":
+                    state["media"] = None
+                elif isinstance(value, str):
+                    base = os.path.basename(value.strip())[:200]
+                    state["media"] = base or None
+                else:
+                    state["media"] = None
                 runtime["reload_media"] = True
             elif key == "slide_shuffle":
                 state["slide_shuffle"] = bool(value)
