@@ -22,7 +22,12 @@ analysis = Analysis(
     binaries=[],
     # icon.ico is the window/exe icon; also shipped as data so the tray can
     # load it when frozen (the EXE version resource is not a filesystem file).
-    datas=[("icon.ico", ".")],
+    datas=[
+        ("icon.ico", "."),
+        # GSMTC helper (stock PowerShell). Unpacked under _MEIPASS/tools/
+        # when frozen -- see d92_panel._nowplaying_script.
+        ("tools/nowplaying.ps1", "tools"),
+    ],
     hiddenimports=[
         "hid",
         "psutil",

@@ -39,6 +39,9 @@ If your PC is rebooting in a loop, see
   (no API key). Sunrise and sunset sit under the current block; at night the
   clear-sky icon follows the real moon phase.
 - **World clocks** — another city's local time and offset from yours.
+- **Now playing** — title, artist and a small album thumbnail from the
+  Windows media session on this PC (Spotify, browser, Groove, …). Phone or
+  watch players are not visible here.
 - **Image / GIF** — a single still or animated file.
 - **Slideshow** — every file in the `media` folder in turn, with a dwell time
   and optional shuffle. Animated GIFs keep animating during their slot.
@@ -133,13 +136,15 @@ use `http://127.0.0.1:8092`.
 3. **Weather** — add a Weather item; set Place and language under Weather.
    Horizon is Now or 1–7 days. Optional Place override on the item for a
    second city (Now / 1 day only).
-4. **Save a scene** — **Save as…** under Layout. Next time, pick it from the
+4. **Now playing** — add a Now playing item while Spotify (or any Windows
+   media session) is active; album art appears when the player supplies it.
+5. **Save a scene** — **Save as…** under Layout. Next time, pick it from the
    preset list to restore layout **and** mode / quality / interval / weather.
    Built-ins (Wide dashboard, …) are layout-only.
-5. **Hold** — tick Hold while you edit; the panel stays on its last frame.
+6. **Hold** — tick Hold while you edit; the panel stays on its last frame.
    **Apply now** pushes one fresh frame. Hold itself is never saved in a
    preset.
-6. **Phone** — run with `--web` (or the exe equivalent if you launch that way
+7. **Phone** — run with `--web` (or the exe equivalent if you launch that way
    from a shortcut). Open the **Phone UI** URL shown under Panel on a phone
    on the same Wi-Fi.
 

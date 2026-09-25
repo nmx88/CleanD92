@@ -783,6 +783,12 @@ class PanelApp:
             fresh["size"] = 0.16
             fresh["color"] = "#ebe6d5"
             fresh["label_color"] = "#8a9bb0"
+        if fresh["type"] == "nowplaying":
+            fresh["size"] = 0.14
+            fresh["width"] = 0.55
+            fresh["color"] = "#ebe6d5"
+            fresh["label_color"] = "#8a9bb0"
+            fresh["show_label"] = True
         items.append(fresh)
         core.apply_patch({"items": items})
         self.selected = fresh["id"]
@@ -1001,6 +1007,8 @@ class PanelApp:
             self.prop_text_hint.configure(
                 text="e.g. New York, US or Tokyo. Shows local time and the "
                      "offset from this PC.")
+        elif item_type == "nowplaying":
+            order = [self.prop_size, self.prop_label, self.prop_colours]
         elif item_type == "text":
             order = [self.prop_text, self.prop_size, self.prop_align,
                      self.prop_colours]
@@ -1054,6 +1062,14 @@ class PanelApp:
             "World clock items show another city's time and the offset from "
             "this PC. Data comes from Open-Meteo; nothing is uploaded except "
             "the place name lookup.\n"
+            "\n"
+            "Now playing\n"
+            "\n"
+            "\u2022 Add a Now playing item to show the title, artist and a "
+            "small album thumbnail from whatever this PC is playing "
+            "(Spotify, browser, Groove, \u2026). It reads the Windows media "
+            "session; phone or watch players are not visible here. Tick "
+            "Show label for the artist line.\n"
             "\n"
             "If the panel goes black\n"
             "\n"
@@ -1138,6 +1154,8 @@ class PanelApp:
                     detail = item.get("source") or ""
                 elif item["type"] == "weather":
                     detail = item.get("format") or "now"
+                elif item["type"] == "nowplaying":
+                    detail = "media"
                 else:
                     label, value = layout.item_strings(
                         item, {"filename": "\u2026"})

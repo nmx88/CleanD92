@@ -1098,6 +1098,190 @@ def start_weather_poller():
     threading.Thread(target=weather_poller, daemon=True).start()
 
 
+# -------------------------------------------------------------- now playing
+# Windows GSMTC via stock PowerShell. Avoids bundling winsdk (large, and the
+# WinRT awaits hung in early probes). tools/nowplaying.ps1 owns the WinRT
+# calls. The poller owns every subprocess; the render thread only reads
+# nowplaying_snapshot(). Never call this from render_loop -- the script can
+# take several seconds and hid_write has no timeout.
+
+NOWPLAYING_POLL = 3.0       # idle gap after a fetch when an item is on canvas
+NOWPLAYING_TIMEOUT = 14.0   # hard cap on the helper process
+NOWPLAYING_THUMB_SIDE = 96  # square JPEG prepared off the render thread
+
+_nowplaying_cache = {
+    "t": 0.0,
+    "title": "",
+    "artist": "",
+    "album": "",
+    "status": "none",
+    "thumb": None,          # small JPEG bytes, or None
+    "error": "",
+}
+_nowplaying_lock = threading.Lock()
+_nowplaying_started = False
+
+
+def _nowplaying_script():
+    """Resolve tools/nowplaying.ps1 for source and frozen runs."""
+    candidates = []
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            candidates.append(os.path.join(meipass, "tools", "nowplaying.ps1"))
+        candidates.append(os.path.join(HERE, "tools", "nowplaying.ps1"))
+    else:
+        candidates.append(os.path.join(HERE, "tools", "nowplaying.ps1"))
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def _prepare_nowplaying_thumb(raw):
+    """Downscale session art to a small JPEG. Runs on the poller thread so
+    the render loop never decodes a multi-megabyte album PNG."""
+    if not raw:
+        return None
+    try:
+        with Image.open(io.BytesIO(raw)) as art:
+            rgb = art.convert("RGB")
+            rgb.thumbnail((NOWPLAYING_THUMB_SIDE, NOWPLAYING_THUMB_SIDE),
+                          Image.LANCZOS)
+            buf = io.BytesIO()
+            rgb.save(buf, format="JPEG", quality=85)
+            rgb.close()
+            return buf.getvalue()
+    except Exception:
+        return None
+
+
+def fetch_nowplaying():
+    """Run the helper once and update the cache. Blocking; off render thread."""
+    import base64
+    import subprocess
+
+    script = _nowplaying_script()
+    if not script:
+        with _nowplaying_lock:
+            _nowplaying_cache.update({
+                "t": time.monotonic(), "error": "helper missing",
+                "status": "none", "title": "", "artist": "", "album": "",
+                "thumb": None,
+            })
+        return
+
+    creationflags = 0
+    if sys.platform == "win32":
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    cmd = [
+        "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+        "-File", script,
+    ]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, timeout=NOWPLAYING_TIMEOUT,
+            check=False, creationflags=creationflags)
+        text = (proc.stdout or b"").decode("utf-8", "replace")
+    except subprocess.TimeoutExpired:
+        with _nowplaying_lock:
+            _nowplaying_cache.update({
+                "t": time.monotonic(), "error": "timed out",
+            })
+        return
+    except OSError as exc:
+        with _nowplaying_lock:
+            _nowplaying_cache.update({
+                "t": time.monotonic(), "error": str(exc)[:60],
+            })
+        return
+
+    fields = {}
+    for line in text.splitlines():
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        fields[key.strip().upper()] = value.strip()
+
+    title = fields.get("TITLE", "")
+    artist = fields.get("ARTIST", "")
+    album = fields.get("ALBUM", "")
+    status = (fields.get("STATUS") or "none").strip()
+    error = fields.get("ERROR", "")
+    thumb = None
+    b64 = fields.get("THUMB_B64") or ""
+    if b64:
+        try:
+            raw = base64.b64decode(b64, validate=False)
+            if 64 < len(raw) < 4 * 1024 * 1024:
+                thumb = _prepare_nowplaying_thumb(raw)
+        except Exception:
+            thumb = None
+
+    with _nowplaying_lock:
+        # Keep the previous art when metadata matches but the thumb read
+        # failed -- GSMTC thumbnails are flaky and flicker is worse than stale.
+        prev = _nowplaying_cache
+        if (thumb is None
+                and title and title == prev.get("title")
+                and artist == prev.get("artist")
+                and prev.get("thumb")):
+            thumb = prev["thumb"]
+        _nowplaying_cache.update({
+            "t": time.monotonic(),
+            "title": title[:80],
+            "artist": artist[:80],
+            "album": album[:80],
+            "status": status[:40],
+            "thumb": thumb,
+            "error": error[:80],
+        })
+
+
+def nowplaying_snapshot():
+    """Non-blocking view of the last media session. Never raises."""
+    with _nowplaying_lock:
+        return {
+            "title": _nowplaying_cache["title"],
+            "artist": _nowplaying_cache["artist"],
+            "album": _nowplaying_cache["album"],
+            "status": _nowplaying_cache["status"],
+            "thumb": _nowplaying_cache["thumb"],
+            "error": _nowplaying_cache["error"],
+            "t": _nowplaying_cache["t"],
+        }
+
+
+def nowplaying_poller():
+    while True:
+        with state_lock:
+            items = list(state.get("items") or [])
+            stopping = runtime["stop"]
+        if stopping:
+            return
+        if any(i.get("type") == "nowplaying" for i in items):
+            fetch_nowplaying()
+        else:
+            # Drop art when the item is gone so a removed strip does not
+            # keep a multi-frame JPEG resident for the rest of the session.
+            with _nowplaying_lock:
+                if _nowplaying_cache.get("thumb") or _nowplaying_cache.get("title"):
+                    _nowplaying_cache.update({
+                        "title": "", "artist": "", "album": "",
+                        "status": "none", "thumb": None, "error": "",
+                        "t": 0.0,
+                    })
+        time.sleep(NOWPLAYING_POLL)
+
+
+def start_nowplaying_poller():
+    global _nowplaying_started
+    if _nowplaying_started:
+        return
+    _nowplaying_started = True
+    threading.Thread(target=nowplaying_poller, daemon=True).start()
+
+
 def load_settings():
     """Merge settings.json into state. Missing or broken file is a no-op."""
     if not os.path.isfile(SETTINGS_PATH):
@@ -1337,6 +1521,24 @@ def metric_values(cfg, filename=None):
                 wmap[item["id"]] = {
                     "label": query[:28], "timezone": "", "pending": True}
         values["worldclock_map"] = wmap
+
+    # Now playing: GSMTC cache is filled by the poller; nothing blocks here.
+    if any(i.get("type") == "nowplaying" for i in (cfg.get("items") or [])):
+        snap = nowplaying_snapshot()
+        status = (snap.get("status") or "").lower()
+        if not snap.get("t"):
+            values["nowplaying"] = {
+                "title": "", "artist": "", "status": "reading", "thumb": None}
+        elif status in ("none",) and not (snap.get("title") or "").strip():
+            values["nowplaying"] = {
+                "title": "", "artist": "", "status": "none", "thumb": None}
+        else:
+            values["nowplaying"] = {
+                "title": snap.get("title") or "",
+                "artist": snap.get("artist") or "",
+                "status": snap.get("status") or "",
+                "thumb": snap.get("thumb"),
+            }
     return values
 
 
@@ -1458,6 +1660,7 @@ def render_loop(panel):
 
     start_lhm_poller()
     start_weather_poller()
+    start_nowplaying_poller()
     runtime["status"] = "streaming"
 
     while True:

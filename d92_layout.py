@@ -21,6 +21,7 @@ drew, which is what makes items draggable in the editor.
 """
 
 import copy
+import io
 import itertools
 import json
 import math
@@ -29,8 +30,8 @@ import re
 import time
 from datetime import datetime, timezone
 
+from PIL import Image as PILImage
 from PIL import ImageDraw
-
 # type -> human label, shown in the editor
 ITEM_TYPES = {
     "clock": "Clock",
@@ -40,6 +41,7 @@ ITEM_TYPES = {
     "filename": "Current file name",
     "weather": "Weather",
     "worldclock": "World clock",
+    "nowplaying": "Now playing",
 }
 
 # Weather item `format` chooses how much forecast to draw. The place and
@@ -405,6 +407,9 @@ def item_strings(item, values):
         weather = values.get("weather") or {}
         place = weather.get("place") or "weather"
         return None, "%s (%s)" % (place, item.get("format") or "now")
+    if kind == "nowplaying":
+        np = values.get("nowplaying") or {}
+        return None, (np.get("title") or "now playing")[:28]
     return None, None
 
 
@@ -842,6 +847,83 @@ def render_worldclock(draw, item, info, width, height, short, fitted,
             max(r[2] for r in rects), max(r[3] for r in rects))
 
 
+def render_nowplaying(draw, item, info, img, width, height, short, fitted,
+                      text_height, translucent=False):
+    """Minimal now-playing strip: optional thumb + title / artist."""
+    if not info:
+        return None
+    left = item["x"] * width
+    top = item["y"] * height
+    span = (item["width"] or (1.0 - item["x"])) * width
+    span = max(48.0, span - short * 0.02)
+    colour = hex_rgb(item["color"], (235, 240, 250))
+    label_colour = hex_rgb(item["label_color"], (110, 125, 150))
+    halo = (0, 0, 0) if translucent else None
+    rects = []
+
+    thumb_side = max(22, int(item["size"] * short * 0.85))
+    thumb_side = min(thumb_side, int(short * 0.55), int(span * 0.35))
+    cursor_x = left
+    thumb = info.get("thumb")
+    if thumb is not None:
+        try:
+            if isinstance(thumb, (bytes, bytearray)):
+                art = PILImage.open(io.BytesIO(thumb)).convert("RGB")
+            else:
+                art = thumb.convert("RGB")
+            art = art.resize((thumb_side, thumb_side), PILImage.LANCZOS)
+            mask = PILImage.new("L", (thumb_side, thumb_side), 0)
+            mdraw = ImageDraw.Draw(mask)
+            if hasattr(mdraw, "rounded_rectangle"):
+                mdraw.rounded_rectangle(
+                    (0, 0, thumb_side - 1, thumb_side - 1),
+                    radius=max(3, thumb_side // 8), fill=255)
+            else:
+                mdraw.ellipse((0, 0, thumb_side - 1, thumb_side - 1), fill=255)
+            img.paste(art, (int(cursor_x), int(top)), mask)
+            art.close()
+            mask.close()
+            rects.append((cursor_x, top, cursor_x + thumb_side,
+                          top + thumb_side))
+            cursor_x += thumb_side + max(8, short * 0.025)
+        except Exception:
+            pass
+
+    text_span = max(20.0, left + span - cursor_x)
+    title = (info.get("title") or "").strip()
+    artist = (info.get("artist") or "").strip()
+    status = (info.get("status") or "").lower()
+    if not title:
+        if status == "reading":
+            title = "reading\u2026"
+        else:
+            title = "Nothing playing"
+    elif status == "paused":
+        title = "\u23f8  " + title
+    elif status in ("playing", "opened"):
+        title = "\u25b8  " + title
+
+    title_px = max(10, item["size"] * short * 0.55)
+    artist_px = max(8, item["size"] * short * 0.38)
+
+    def put(x, y, text, px, fill):
+        font = fitted(text, text_span, px)
+        box = font.getbbox(text) if hasattr(font, "getbbox") else (0, 0, 0, 0)
+        drawn = box[2] - box[0]
+        if halo:
+            for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                draw.text((x + dx, y + dy), text, font=font, fill=halo)
+        draw.text((x, y), text, font=font, fill=fill)
+        return x, y, x + drawn, y + text_height(font, text)
+
+    rects.append(put(cursor_x, top, title[:48], title_px, colour))
+    if artist and item.get("show_label", True):
+        rects.append(put(cursor_x, top + title_px * 0.95, artist[:48],
+                         artist_px, label_colour))
+    return (min(r[0] for r in rects), min(r[1] for r in rects),
+            max(r[2] for r in rects), max(r[3] for r in rects))
+
+
 def render(img, items, values, fitted, text_height, translucent=False):
     """Draw every item onto img. Returns {item_id: (x0, y0, x1, y1)} in pixel
     coordinates, which the editor uses for hit testing and drag handles."""
@@ -868,6 +950,15 @@ def render(img, items, values, fitted, text_height, translucent=False):
             box = render_worldclock(draw, item, info,
                                     width, height, short, fitted, text_height,
                                     translucent=translucent)
+            if box:
+                boxes[item["id"]] = box
+            continue
+
+        if item["type"] == "nowplaying":
+            box = render_nowplaying(
+                draw, item, values.get("nowplaying"), img,
+                width, height, short, fitted, text_height,
+                translucent=translucent)
             if box:
                 boxes[item["id"]] = box
             continue
