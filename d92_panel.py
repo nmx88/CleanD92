@@ -1617,6 +1617,8 @@ def fetch_notifications():
                 "app": (app or aumid.split(".")[-1] or "App")[:40],
                 "title": title[:80],
                 "body": body[:120],
+                # Helper emits Windows order; lower index is treated as newer.
+                "ord": len(fresh),
             })
 
     with _notify_lock:
@@ -1626,8 +1628,8 @@ def fetch_notifications():
             old = prev.get(row["id"])
             row["seen"] = old["seen"] if old else now
             merged.append(row)
-        # Prefer chat/mail over whatever order Windows returned (Cursor spam
-        # used to bury Viber when we only kept the first few).
+        # Prefer chat/mail, then Gmail-in-browser; within a tier keep Windows
+        # order so the newest toast wins (Cursor spam must not bury Viber).
         def _rank(row):
             blob = (" ".join((
                 row.get("aumid") or "", row.get("app") or "",
@@ -1638,7 +1640,7 @@ def fetch_notifications():
             if any(t in blob for t in NOTIFY_BROWSER_TOKENS):
                 return 1
             return 2
-        merged.sort(key=_rank)
+        merged.sort(key=lambda row: (_rank(row), row.get("ord", 9999)))
         _notify_cache.update({
             "t": now,
             "access": access,
