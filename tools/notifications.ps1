@@ -42,9 +42,10 @@ try {
     $kind = [Windows.UI.Notifications.NotificationKinds]::Toast
     $list = Await-Op ($listener.GetNotificationsAsync($kind)) ([System.Collections.Generic.IReadOnlyList[Windows.UI.Notifications.UserNotification]]) 8000
     Write-Output ("COUNT=" + $list.Count)
+    # Emit every toast (cap high). A low cap hid Viber behind Cursor spam.
     $n = 0
     foreach ($toast in $list) {
-        if ($n -ge 8) { break }
+        if ($n -ge 60) { break }
         $app = ""
         try { $app = Safe $toast.AppInfo.DisplayInfo.DisplayName } catch {}
         $aumid = ""

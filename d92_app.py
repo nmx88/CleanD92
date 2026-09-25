@@ -1194,8 +1194,9 @@ class PanelApp:
             "First use registers a sparse package identity (Developer Mode "
             "may be required) and asks for notification access. Shows "
             "Viber, Telegram, Outlook and Mail toasts; browser toasts only "
-            "when they look like Gmail. About 30 seconds per toast. The "
-            "strip stays blank when mirroring is off.\n"
+            "when they look like Gmail. Stays while the toast remains in the "
+            "Windows Action Center (up to about 15 minutes). The strip stays "
+            "blank when mirroring is off.\n"
             "\n"
             "If the panel goes black\n"
             "\n"
@@ -1283,6 +1284,10 @@ class PanelApp:
                     detail = item.get("format") or "now"
                 elif item["type"] == "nowplaying":
                     detail = "media"
+                elif item["type"] == "notify":
+                    detail = "toast"
+                elif item["type"] == "timer":
+                    detail = item.get("format") or "timer"
                 else:
                     label, value = layout.item_strings(
                         item, {"filename": "\u2026"})

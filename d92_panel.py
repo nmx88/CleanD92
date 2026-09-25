@@ -1454,8 +1454,10 @@ def timer_display_map(items):
 # user consent. Opt-in via state["notify_mirror"].
 
 NOTIFY_POLL = 4.0
-NOTIFY_TIMEOUT = 14.0
-NOTIFY_DWELL = 30.0       # seconds a toast stays on the strip once seen
+NOTIFY_TIMEOUT = 20.0
+# Keep a toast on the strip while Windows still lists it. Cap age so a
+# never-dismissed Action Center entry cannot stick forever.
+NOTIFY_MAX_AGE = 15 * 60
 # Native apps matched on AUMID / display name. Browser toasts are allowed
 # only when the title/body also looks like Gmail (see _notify_allowed).
 NOTIFY_ALLOW_APPS = (
@@ -1624,6 +1626,19 @@ def fetch_notifications():
             old = prev.get(row["id"])
             row["seen"] = old["seen"] if old else now
             merged.append(row)
+        # Prefer chat/mail over whatever order Windows returned (Cursor spam
+        # used to bury Viber when we only kept the first few).
+        def _rank(row):
+            blob = (" ".join((
+                row.get("aumid") or "", row.get("app") or "",
+                row.get("title") or "", row.get("body") or "",
+            ))).lower()
+            if any(t in blob for t in NOTIFY_ALLOW_APPS):
+                return 0
+            if any(t in blob for t in NOTIFY_BROWSER_TOKENS):
+                return 1
+            return 2
+        merged.sort(key=_rank)
         _notify_cache.update({
             "t": now,
             "access": access,
@@ -1633,10 +1648,10 @@ def fetch_notifications():
 
 
 def notify_snapshot():
-    """Newest allowed toast still within dwell, or None. Never raises.
+    """Newest allowed toast still listed by Windows, or None. Never raises.
 
     When mirroring is off the strip stays blank -- no sticky coaching from an
-    earlier failed poll.
+    earlier failed poll. Age-capped so sticky Action Center entries expire.
     """
     with state_lock:
         mirroring = bool(state.get("notify_mirror"))
@@ -1664,8 +1679,8 @@ def notify_snapshot():
             }
         return None
     live = [t for t in toasts
-            if now - t.get("seen", now) <= NOTIFY_DWELL
-            and (t.get("title") or t.get("body"))]
+            if (t.get("title") or t.get("body"))
+            and now - t.get("seen", now) <= NOTIFY_MAX_AGE]
     if not live:
         return None
     top = live[0]
