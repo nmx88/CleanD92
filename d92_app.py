@@ -40,7 +40,7 @@ from d92 import D92
 APP_NAME = "CleanD92"
 # Bump with the release tag (CI also stamps version_info.txt from the tag so
 # Windows file Properties cannot drift the way they did at 1.0.0 forever).
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.6.0"
 CREATOR = "nmx88"
 REPO_URL = "https://github.com/nmx88/CleanD92"
 REFRESH_MS = 700          # preview and status refresh
