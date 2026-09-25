@@ -149,8 +149,10 @@ use `http://127.0.0.1:8092`.
    media session) is active; album art appears when the player supplies it.
    Stops showing a few seconds after playback ends.
 5. **Notifications** — add a Notification item, tick Mirror Windows toasts,
-   and allow access when Windows asks. Register sparse identity if prompted
-   (Developer Mode may be required).
+   and allow access when Windows asks. Register sparse identity if prompted.
+   Turn on **Developer Mode** first: Settings search → “Developer Mode”
+   (System → For developers). System → Advanced is a different page and will
+   not help. You need the `.exe` build so the package can point at it.
 6. **Save a scene** — **Save as…** under Layout. Next time, pick it from the
    preset list to restore layout **and** mode / quality / interval / weather.
    Built-ins (Wide dashboard, …) are layout-only. Ctrl+1…9 jumps to presets

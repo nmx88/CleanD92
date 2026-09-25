@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Sparse package for CleanD92. Gives the unpackaged exe an identity so
-  UserNotificationListener can read toasts. Register with
-  tools/register_identity.ps1 (Developer Mode recommended).
+  Sparse / external-location identity package for CleanD92.
+  AllowExternalContent is a child of Properties (not a Package attribute).
+  Register with tools/register_identity.ps1. Needs Developer Mode or sideloading.
 -->
 <Package
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
@@ -10,34 +10,33 @@
   xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
   xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-  IgnorableNamespaces="uap uap3 uap10 rescap"
-  uap10:AllowExternalContent="true">
+  IgnorableNamespaces="uap uap3 uap10 rescap">
   <Identity
     Name="nmx88.CleanD92"
     Publisher="CN=CleanD92 Local"
-    Version="1.7.0.0" />
+    Version="1.7.2.0"
+    ProcessorArchitecture="neutral" />
   <Properties>
     <DisplayName>CleanD92</DisplayName>
     <PublisherDisplayName>nmx88</PublisherDisplayName>
-    <Description>Driver-free StreamDock D92 control app</Description>
     <Logo>StoreLogo.png</Logo>
+    <uap10:AllowExternalContent>true</uap10:AllowExternalContent>
   </Properties>
   <Resources>
-    <Resource Language="en-US" />
+    <Resource Language="en-us" />
   </Resources>
   <Dependencies>
-    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" />
   </Dependencies>
   <Capabilities>
     <rescap:Capability Name="runFullTrust" />
+    <rescap:Capability Name="unvirtualizedResources" />
     <uap3:Capability Name="userNotificationListener" />
   </Capabilities>
   <Applications>
     <Application Id="CleanD92"
                  Executable="CleanD92.exe"
-                 EntryPoint="Windows.FullTrustApplication"
-                 uap10:TrustLevel="mediumIL"
-                 uap10:RuntimeBehavior="win32App">
+                 EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
         DisplayName="CleanD92"
         Description="CleanD92 panel app"

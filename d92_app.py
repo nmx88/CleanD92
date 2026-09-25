@@ -615,12 +615,16 @@ class PanelApp:
                 "notification access the next time toasts are polled.",
                 parent=self.root)
         else:
-            messagebox.showwarning(
-                app_title(),
+            hint = (
                 "Could not register identity:\n%s\n\n"
-                "Enable Developer Mode under Settings \u2192 System \u2192 "
-                "For developers, then try again." % (message or "unknown"),
-                parent=self.root)
+                "1. Use the CleanD92.exe build (not only source) so the "
+                "package can point at an executable.\n"
+                "2. Turn on Developer Mode: open Settings, search for "
+                "\"Developer Mode\" (System \u2192 For developers). "
+                "System \u2192 Advanced is a different page.\n"
+                "3. Then click Register sparse identity again."
+            ) % (message or "unknown")
+            messagebox.showwarning(app_title(), hint, parent=self.root)
 
     def _panel(self, parent):
         group = ttk.Labelframe(parent, text="Panel", padding=10)
