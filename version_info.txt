@@ -4,8 +4,8 @@
 # runs tools/stamp_version.py so this file matches the git tag.
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 4, 2, 0),
-    prodvers=(1, 4, 2, 0),
+    filevers=(1, 5, 0, 0),
+    prodvers=(1, 5, 0, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -19,12 +19,12 @@ VSVersionInfo(
         '040904B0',
         [StringStruct('CompanyName', 'nmx88'),
          StringStruct('FileDescription', 'CleanD92 - driver-free control app for the StreamDock D92 panel'),
-         StringStruct('FileVersion', '1.4.2.0'),
+         StringStruct('FileVersion', '1.5.0.0'),
          StringStruct('InternalName', 'CleanD92'),
          StringStruct('LegalCopyright', 'MIT Licence'),
          StringStruct('OriginalFilename', 'CleanD92.exe'),
          StringStruct('ProductName', 'CleanD92'),
-         StringStruct('ProductVersion', '1.4.2.0')])
+         StringStruct('ProductVersion', '1.5.0.0')])
     ]),
     VarFileInfo([VarStruct('Translation', [1033, 1200])])
   ]

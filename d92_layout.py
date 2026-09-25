@@ -270,7 +270,11 @@ def normalise_scene(raw):
                 clean[key] = None
             elif isinstance(value, str):
                 # Basename only -- never allow ../ out of media/.
-                clean[key] = os.path.basename(value)[:200] or None
+                base = os.path.basename(value.strip())
+                if not base or base in (".", ".."):
+                    clean[key] = None
+                else:
+                    clean[key] = base[:200]
         elif key in ("weather_place", "weather_country", "lhm_url",
                      "color_bg") and isinstance(value, str):
             clean[key] = value[:300] if key == "lhm_url" else value[:80]
@@ -279,10 +283,43 @@ def normalise_scene(raw):
     return clean or None
 
 
+def preset_filename(name, strict=False):
+    """Return a safe preset basename. Raises ValueError if unusable.
+
+    With strict=True (load / delete / API), path characters and punctuation
+    are rejected rather than silently rewritten -- that is what stops
+    `../secret` from being joined under presets/. Save keeps filter-and-strip
+    so a typed name with a stray character still works."""
+    text = (name or "").strip()
+    if not text or text != os.path.basename(text):
+        raise ValueError("invalid preset name")
+    safe = "".join(c for c in text if c.isalnum() or c in " _-()").strip()
+    if not safe or safe in (".", ".."):
+        raise ValueError("invalid preset name")
+    if strict and safe != text:
+        raise ValueError("invalid preset name")
+    return safe
+
+
+def _preset_path(base, safe_name):
+    """Absolute path under presets/, or None if it would escape the folder."""
+    folder = os.path.abspath(preset_dir(base))
+    path = os.path.abspath(os.path.join(folder, "%s.json" % safe_name))
+    if path == folder or not path.startswith(folder + os.sep):
+        return None
+    return path
+
+
 def load_preset(base, name):
     """Return (items, scene_or_None). Built-ins and old files have no scene."""
-    path = os.path.join(preset_dir(base), "%s.json" % name)
-    if os.path.isfile(path):
+    try:
+        safe = preset_filename(name, strict=True)
+    except ValueError:
+        if name in DEFAULT_PRESETS:
+            return normalise_all(copy.deepcopy(DEFAULT_PRESETS[name])), None
+        raise KeyError(name)
+    path = _preset_path(base, safe)
+    if path and os.path.isfile(path):
         with open(path, "r", encoding="utf-8") as handle:
             data = json.load(handle)
         if isinstance(data, dict):
@@ -292,18 +329,17 @@ def load_preset(base, name):
             items = normalise_all(data)
             scene = None
         return items, scene
-    if name in DEFAULT_PRESETS:
-        return normalise_all(copy.deepcopy(DEFAULT_PRESETS[name])), None
+    if safe in DEFAULT_PRESETS:
+        return normalise_all(copy.deepcopy(DEFAULT_PRESETS[safe])), None
     raise KeyError(name)
 
 
 def save_preset(base, name, items, scene=None):
-    safe = "".join(c for c in name if c.isalnum() or c in " _-()").strip()
-    if not safe:
-        raise ValueError("preset name cannot be empty")
-    folder = preset_dir(base)
-    os.makedirs(folder, exist_ok=True)
-    path = os.path.join(folder, "%s.json" % safe)
+    safe = preset_filename(name, strict=False)
+    path = _preset_path(base, safe)
+    if path is None:
+        raise ValueError("invalid preset name")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     payload = {"name": safe, "items": normalise_all(items)}
     cleaned = normalise_scene(scene) if scene is not None else None
     if cleaned:
@@ -315,11 +351,16 @@ def save_preset(base, name, items, scene=None):
 
 
 def delete_preset(base, name):
-    path = os.path.join(preset_dir(base), "%s.json" % name)
-    if os.path.isfile(path):
+    try:
+        safe = preset_filename(name, strict=True)
+    except ValueError:
+        return False
+    path = _preset_path(base, safe)
+    if path and os.path.isfile(path):
         os.remove(path)
         return True
     return False       # built-ins cannot be deleted
+
 
 
 # ------------------------------------------------------------------ render

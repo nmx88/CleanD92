@@ -2077,7 +2077,8 @@ def apply_patch(patch):
                     state["media"] = None
                 elif isinstance(value, str):
                     base = os.path.basename(value.strip())[:200]
-                    state["media"] = base or None
+                    state["media"] = None if (not base or base in (".", "..")) \
+                        else base
                 else:
                     state["media"] = None
                 runtime["reload_media"] = True

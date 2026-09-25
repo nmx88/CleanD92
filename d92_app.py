@@ -40,7 +40,7 @@ from d92 import D92
 APP_NAME = "CleanD92"
 # Bump with the release tag (CI also stamps version_info.txt from the tag so
 # Windows file Properties cannot drift the way they did at 1.0.0 forever).
-APP_VERSION = "1.4.2"
+APP_VERSION = "1.5.0"
 CREATOR = "nmx88"
 REPO_URL = "https://github.com/nmx88/CleanD92"
 REFRESH_MS = 700          # preview and status refresh
@@ -950,16 +950,12 @@ class PanelApp:
         target = self.ORIENT_PRESETS.get((old, orientation), {}).get(preset)
         if target and old != orientation:
             try:
-                items, scene = layout.load_preset(core.HERE, target)
+                # Orient pairs are layout swaps only. Never apply a shadowed
+                # user scene here -- that would wipe mode / weather / quality
+                # when someone Save as…'d over a built-in name.
+                items, _scene = layout.load_preset(core.HERE, target)
                 patch["items"] = items
                 patch["preset"] = target
-                # Built-in orient swaps are items-only; keep the user's
-                # weather / quality / mode rather than wiping them.
-                if scene:
-                    # Do not override the orientation we just chose.
-                    scene = dict(scene)
-                    scene.pop("layout", None)
-                    patch.update(scene)
             except Exception:
                 pass
         self.push(**patch)

@@ -124,6 +124,27 @@ address under Panel (Copy phone URL). Use only on your LAN — there is no
 login; do not port-forward 8092 to the internet. On this PC you can still
 use `http://127.0.0.1:8092`.
 
+## Everyday use
+
+1. **Info screen** — leave Mode on Clock. Drag items on the preview; colours
+   and sizes are on the right under Items.
+2. **Media** — drop files onto the preview or into `media/`, then pick Image /
+   GIF or Slideshow. Ultrawide / 32:9 sources crop cleanly.
+3. **Weather** — add a Weather item; set Place and language under Weather.
+   Horizon is Now or 1–7 days. Optional Place override on the item for a
+   second city (Now / 1 day only).
+4. **Save a scene** — **Save as…** under Layout. Next time, pick it from the
+   preset list to restore layout **and** mode / quality / interval / weather.
+   Built-ins (Wide dashboard, …) are layout-only.
+5. **Hold** — tick Hold while you edit; the panel stays on its last frame.
+   **Apply now** pushes one fresh frame. Hold itself is never saved in a
+   preset.
+6. **Phone** — run with `--web` (or the exe equivalent if you launch that way
+   from a shortcut). Open the **Phone UI** URL shown under Panel on a phone
+   on the same Wi-Fi.
+
+See **Presets (scenes)** below for exactly what is stored where.
+
 ## Presets (scenes)
 
 **Save as…** writes a JSON file under `presets/`. User presets are full
