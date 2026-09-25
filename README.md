@@ -45,9 +45,10 @@ If your PC is rebooting in a loop, see
 - **Layout editor** — drag readouts around on a live preview and set each
   one's size, alignment and colours. Readouts can be overlaid on top of an
   image or a slideshow.
-- **Presets** — four built in, plus your own saved as JSON. Positions are
-  stored as fractions of the canvas, so a preset works whether the panel is
-  mounted flat or on its end.
+- **Presets** — built-ins plus your own. **Save as…** stores a full scene
+  (layout items, mode, quality, interval, weather, orientation, …). `hold`
+  and the fixed canvas size are not saved; weather also lands in
+  `settings.json` for the next cold start.
 - **Hold and Apply** — keep editing while the panel goes on showing the frame
   it already has, then push one frame when you are happy with it.
 - **Minimise to tray** — the minimise button hides the window in the
@@ -122,6 +123,28 @@ so a phone on the same Wi-Fi can open it. The window shows a **Phone UI**
 address under Panel (Copy phone URL). Use only on your LAN — there is no
 login; do not port-forward 8092 to the internet. On this PC you can still
 use `http://127.0.0.1:8092`.
+
+## Presets (scenes)
+
+**Save as…** writes a JSON file under `presets/`. User presets are full
+**scenes**, not layout-only:
+
+| Stored in the preset | Not stored |
+|---|---|
+| Layout items (clock, weather, readouts, …) | `hold` (draft toggle while editing) |
+| Mode (clock / image / slideshow) and selected media file name | Fixed canvas size (always 1920×462 authoring) |
+| Brightness, interval, JPEG quality, info background | Built-in presets (Wide / Tall …) — those ship items only |
+| Orientation, flip, fit, slide dwell / shuffle | |
+| Weather place, country, units, language | |
+| Poll LHM + LHM URL | |
+
+Loading a user preset restores that whole scene. Older preset files that only
+have `items` still load; they leave mode / quality / weather as they are.
+
+**`settings.json`** is separate: it remembers the last weather place / language
+/ units across app restarts so a cold start has a city before you pick a
+preset. Editing weather updates both the live state and `settings.json`;
+saving a preset also snapshots those weather fields into that preset.
 
 ### Building the exe yourself
 
