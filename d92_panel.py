@@ -76,7 +76,8 @@ EXTENSIONS = (".gif", ".png", ".jpg", ".jpeg", ".bmp", ".webp")
 # media/; this only stops someone dragging a multi-GB file onto the window.
 MAX_IMPORT_BYTES = 80 * 1024 * 1024
 
-HOST = "127.0.0.1"
+HOST = "127.0.0.1"         # loopback print address / legacy
+WEB_HOST = "0.0.0.0"       # --web listens on all interfaces (phone on LAN)
 PORT = 8092
 
 STALL_WARN = 3.0          # seconds; a frame slower than this is suspicious
@@ -1648,6 +1649,53 @@ def render_loop(panel):
 
 # ------------------------------------------------------------------- http
 
+def lan_addresses():
+    """Non-loopback IPv4 addresses, Wi-Fi first when we can tell.
+
+    VirtualBox / APIPA / some Hyper-V adapters often appear beside the real
+    LAN address; rank them last so the phone URL is usually useful."""
+    import socket
+    found = []
+    try:
+        hostname = socket.gethostname()
+        for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
+            addr = info[4][0]
+            if addr and not addr.startswith("127.") and addr not in found:
+                found.append(addr)
+    except OSError:
+        pass
+    if not found:
+        try:
+            probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                probe.connect(("8.8.8.8", 80))
+                addr = probe.getsockname()[0]
+                if addr and not addr.startswith("127."):
+                    found.append(addr)
+            finally:
+                probe.close()
+        except OSError:
+            pass
+
+    def rank(addr):
+        if addr.startswith("169.254."):
+            return 90
+        if addr.startswith("192.168.56."):
+            return 50          # VirtualBox host-only
+        if addr.startswith("172.1") or addr.startswith("172.2"):
+            return 40          # common WSL / Docker ranges
+        if addr.startswith("192.168.") or addr.startswith("10."):
+            return 0
+        return 20
+
+    return sorted(found, key=rank)
+
+
+def phone_urls(port=None):
+    """URLs a phone on the same Wi-Fi can open."""
+    port = PORT if port is None else port
+    return ["http://%s:%d" % (addr, port) for addr in lan_addresses()]
+
 PAGE = """<!doctype html>
 <html><head><meta charset="utf-8"><title>D92 panel</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -1690,6 +1738,16 @@ input[type=text]{width:100%;background:#151922;color:#e6e9ef;
 #sensors{white-space:pre-wrap;font-family:ui-monospace,Consolas,monospace;
  font-size:12px;color:#9aa5b8;background:#12151c;border:1px solid #232733;
  border-radius:8px;padding:10px;margin-top:10px;display:none}
+/* Phone / narrow screens: bigger taps, full-width segments. */
+@media (max-width:640px){
+ body{padding:14px}
+ h1{font-size:18px}
+ .seg button,.chk input,select,input[type=number],input[type=text],
+ input[type=range],input[type=color]{min-height:44px;font-size:16px}
+ .seg{flex-direction:column}
+ .row>div{min-width:100%}
+ #pv{max-height:220px}
+}
 </style></head><body>
 <h1>StreamDock D92</h1>
 <div class="sub">Media is read from the <code>media</code> folder next to
@@ -2139,8 +2197,13 @@ def main():
     worker = threading.Thread(target=render_loop, args=(panel,), daemon=True)
     worker.start()
 
-    server = ThreadingHTTPServer((HOST, PORT), Handler)
-    print("\nControl panel:  http://%s:%d" % (HOST, PORT))
+    server = ThreadingHTTPServer((WEB_HOST, PORT), Handler)
+    urls = phone_urls() or ["http://127.0.0.1:%d" % PORT]
+    print("\nControl panel (this PC):  http://127.0.0.1:%d" % PORT)
+    print("Phone on same Wi-Fi:      %s" % urls[0])
+    if len(urls) > 1:
+        for extra in urls[1:]:
+            print("                         %s" % extra)
     print("Media folder :  %s" % MEDIA_DIR)
     print("Ctrl+C to stop.\n")
     try:

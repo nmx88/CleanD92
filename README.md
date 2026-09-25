@@ -111,11 +111,17 @@ Other ways to run it:
 
 ```
 python d92_app.py              the window (default)
-python d92_app.py --web        window plus a browser UI on 127.0.0.1:8092
+python d92_app.py --web        window plus a browser UI on port 8092
 python d92_app.py --web-only   headless, browser UI only
 python d92.py probe            open the panel and print its identity
 python d92.py bars             stream colour bars, to check orientation
 ```
+
+With `--web`, the control page listens on **all interfaces** (`0.0.0.0:8092`)
+so a phone on the same Wi-Fi can open it. The window shows a **Phone UI**
+address under Panel (Copy phone URL). Use only on your LAN — there is no
+login; do not port-forward 8092 to the internet. On this PC you can still
+use `http://127.0.0.1:8092`.
 
 ### Building the exe yourself
 

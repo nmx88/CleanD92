@@ -6,7 +6,7 @@ Double-click and it opens a window: live preview on the left, every control
 on the right. No browser, no vendor software, no kernel driver.
 
     python d92_app.py              native window (default)
-    python d92_app.py --web        also serve the browser UI on 127.0.0.1:8092
+    python d92_app.py --web        also serve the browser UI on port 8092 (LAN)
     python d92_app.py --web-only   headless, browser UI only
 
 Needs d92.py and d92_panel.py beside it, plus:
@@ -17,7 +17,7 @@ embedded browser: the point of this app is to be a single portable exe that
 works on a machine where the user has installed nothing, and a WebView2
 runtime dependency is exactly the kind of failure they cannot diagnose.
 The browser UI in d92_panel.py still works and drives the same shared state,
-so --web gives you remote control from a phone on the same machine.
+so --web gives you remote control from a phone on the same Wi-Fi.
 
 All device writes still happen on the one render thread in d92_panel. This
 window only edits state, exactly like the HTTP handler does.
@@ -77,9 +77,10 @@ def creator_link(parent, bg="#14161b", dim="#98a3b6", accent="#7eb8ff"):
 # --------------------------------------------------------------------- app
 
 class PanelApp:
-    def __init__(self, root, panel):
+    def __init__(self, root, panel, phone_url=None):
         self.root = root
         self.panel = panel
+        self.phone_url = phone_url or ""
         self._photo = None
         self.source_labels = {}
         self._after = None
@@ -604,6 +605,19 @@ class PanelApp:
                   ).pack(anchor="w", pady=(4, 0))
         ttk.Button(group, text="Wake panel (DIS \u2192 LIG)",
                    command=self.wake).pack(fill="x", pady=(8, 0))
+        if self.phone_url:
+            ttk.Label(group, text="Phone UI (same Wi-Fi)",
+                      style="Dim.TLabel").pack(anchor="w", pady=(10, 0))
+            self.phone_url_var = tk.StringVar(value=self.phone_url)
+            ttk.Entry(group, textvariable=self.phone_url_var,
+                      state="readonly").pack(fill="x")
+            ttk.Button(group, text="Copy phone URL",
+                       command=self.copy_phone_url).pack(fill="x", pady=(4, 0))
+            ttk.Label(group, wraplength=380, style="Dim.TLabel",
+                      text="Open that address in the phone browser. Only on "
+                           "your LAN \u2014 do not forward the port to the "
+                           "internet; there is no login."
+                      ).pack(anchor="w", pady=(4, 0))
 
     # -- widget helpers ---------------------------------------------------
 
@@ -1309,6 +1323,17 @@ class PanelApp:
         with core.state_lock:
             core.runtime["wake"] = True
 
+    def copy_phone_url(self):
+        url = self.phone_url or format_phone_urls()
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(url)
+            with core.state_lock:
+                core.runtime["message"] = "phone URL copied: %s" % url
+        except Exception as exc:
+            messagebox.showerror("Phone URL", "Cannot copy:\n%s" % exc,
+                                 parent=self.root)
+
     def apply_now(self):
         """Push exactly one fresh frame, even while Hold is on."""
         with core.state_lock:
@@ -1574,9 +1599,17 @@ def start_backend():
 
 
 def start_web():
-    server = core.ThreadingHTTPServer((core.HOST, core.PORT), core.Handler)
+    """Serve the browser UI on all interfaces so a phone on the LAN can open it."""
+    server = core.ThreadingHTTPServer((core.WEB_HOST, core.PORT), core.Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
+
+
+def format_phone_urls():
+    urls = core.phone_urls()
+    if not urls:
+        return "http://127.0.0.1:%d" % core.PORT
+    return urls[0]
 
 
 DEVICE_HELP = (
@@ -1650,8 +1683,14 @@ def main():
                 return 1
 
     server = start_web() if web else None
+    phone_url = ""
     if server:
-        print("Browser UI: http://%s:%d" % (core.HOST, core.PORT))
+        urls = core.phone_urls()
+        phone_url = urls[0] if urls else "http://127.0.0.1:%d" % core.PORT
+        print("Browser UI (this PC): http://127.0.0.1:%d" % core.PORT)
+        print("Phone on same Wi-Fi:  %s" % phone_url)
+        for extra in urls[1:]:
+            print("                      %s" % extra)
 
     if "--web-only" in flags:
         print("Media folder: %s" % core.MEDIA_DIR)
@@ -1667,7 +1706,7 @@ def main():
         return 0
 
     root = tk.Tk()
-    PanelApp(root, panel)
+    PanelApp(root, panel, phone_url=phone_url if server else None)
     root.mainloop()
     if server:
         server.server_close()
