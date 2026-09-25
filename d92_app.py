@@ -344,8 +344,10 @@ class PanelApp:
                                                     expand=True, fill="x",
                                                     padx=(6, 0))
         ttk.Label(group, style="Dim.TLabel", wraplength=380,
-                  text="Positions are saved as fractions of the canvas, so a "
-                       "preset works in both orientations."
+                  text="Saves the layout and current settings (mode, quality, "
+                       "interval, weather, orientation, \u2026). Positions are "
+                       "fractions of the canvas so they work in both "
+                       "orientations."
                   ).pack(anchor="w", pady=(6, 0))
 
     def _items_group(self, parent):
@@ -859,12 +861,15 @@ class PanelApp:
     def load_preset(self):
         name = self.preset.get()
         try:
-            items = layout.load_preset(core.HERE, name)
+            items, scene = layout.load_preset(core.HERE, name)
         except Exception as exc:
             messagebox.showerror("Preset", "Cannot load %r:\n%s" % (name, exc),
                                  parent=self.root)
             return
-        core.apply_patch({"items": items, "preset": name})
+        patch = {"items": items, "preset": name}
+        if scene:
+            patch.update(scene)
+        core.apply_patch(patch)
         self.selected = items[0]["id"] if items else None
         self.pull()
 
@@ -875,8 +880,11 @@ class PanelApp:
                                       initialvalue=current, parent=self.root)
         if not name:
             return
+        with core.state_lock:
+            scene = layout.scene_from_state(core.state)
         try:
-            saved = layout.save_preset(core.HERE, name, self.items())
+            saved = layout.save_preset(core.HERE, name, self.items(),
+                                       scene=scene)
         except Exception as exc:
             messagebox.showerror("Preset", "Cannot save:\n%s" % exc,
                                  parent=self.root)
@@ -926,9 +934,16 @@ class PanelApp:
         target = self.ORIENT_PRESETS.get((old, orientation), {}).get(preset)
         if target and old != orientation:
             try:
-                items = layout.load_preset(core.HERE, target)
+                items, scene = layout.load_preset(core.HERE, target)
                 patch["items"] = items
                 patch["preset"] = target
+                # Built-in orient swaps are items-only; keep the user's
+                # weather / quality / mode rather than wiping them.
+                if scene:
+                    # Do not override the orientation we just chose.
+                    scene = dict(scene)
+                    scene.pop("layout", None)
+                    patch.update(scene)
             except Exception:
                 pass
         self.push(**patch)

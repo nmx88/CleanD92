@@ -215,29 +215,101 @@ def list_presets(base):
     return names
 
 
+# Keys stored beside `items` in a user preset. hold / canvas size stay out:
+# hold is a draft toggle, canvas dimensions are fixed by the panel.
+SCENE_KEYS = (
+    "mode", "media", "brightness", "interval_ms",
+    "layout", "flip", "fit", "quality", "color_bg",
+    "slide_seconds", "slide_shuffle",
+    "show_gpu", "lhm_url",
+    "weather_place", "weather_country", "weather_units", "weather_lang",
+)
+
+
+def scene_from_state(state):
+    """Snapshot the tunable fields a preset should restore."""
+    scene = {}
+    for key in SCENE_KEYS:
+        if key not in state:
+            continue
+        value = state[key]
+        if key == "media" and value is not None:
+            value = str(value)[:200]
+        scene[key] = value
+    return scene
+
+
+def normalise_scene(raw):
+    """Keep only known scene keys with basic type checks. Never raises."""
+    if not isinstance(raw, dict):
+        return None
+    clean = {}
+    for key in SCENE_KEYS:
+        if key not in raw:
+            continue
+        value = raw[key]
+        if key in ("flip", "slide_shuffle", "show_gpu"):
+            clean[key] = bool(value)
+        elif key in ("brightness", "interval_ms", "quality", "slide_seconds"):
+            try:
+                clean[key] = int(value)
+            except (TypeError, ValueError):
+                continue
+        elif key == "mode" and value not in ("clock", "media", "slideshow"):
+            continue
+        elif key == "layout" and value not in ("horizontal", "vertical"):
+            continue
+        elif key == "fit" and value not in ("cover", "letterbox"):
+            continue
+        elif key == "weather_units" and value not in ("C", "F"):
+            continue
+        elif key == "weather_lang" and value not in ("el", "en"):
+            continue
+        elif key == "media":
+            if value is None or value == "":
+                clean[key] = None
+            elif isinstance(value, str):
+                clean[key] = value[:200]
+        elif key in ("weather_place", "weather_country", "lhm_url",
+                     "color_bg") and isinstance(value, str):
+            clean[key] = value[:300] if key == "lhm_url" else value[:80]
+        else:
+            clean[key] = value
+    return clean or None
+
+
 def load_preset(base, name):
-    """Saved file wins over a built-in of the same name."""
+    """Return (items, scene_or_None). Built-ins and old files have no scene."""
     path = os.path.join(preset_dir(base), "%s.json" % name)
     if os.path.isfile(path):
         with open(path, "r", encoding="utf-8") as handle:
             data = json.load(handle)
-        items = data.get("items") if isinstance(data, dict) else data
-        return normalise_all(items)
+        if isinstance(data, dict):
+            items = normalise_all(data.get("items"))
+            scene = normalise_scene(data.get("scene"))
+        else:
+            items = normalise_all(data)
+            scene = None
+        return items, scene
     if name in DEFAULT_PRESETS:
-        return normalise_all(copy.deepcopy(DEFAULT_PRESETS[name]))
+        return normalise_all(copy.deepcopy(DEFAULT_PRESETS[name])), None
     raise KeyError(name)
 
 
-def save_preset(base, name, items):
+def save_preset(base, name, items, scene=None):
     safe = "".join(c for c in name if c.isalnum() or c in " _-()").strip()
     if not safe:
         raise ValueError("preset name cannot be empty")
     folder = preset_dir(base)
     os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, "%s.json" % safe)
+    payload = {"name": safe, "items": normalise_all(items)}
+    cleaned = normalise_scene(scene) if scene is not None else None
+    if cleaned:
+        payload["scene"] = cleaned
     with open(path, "w", encoding="utf-8") as handle:
-        json.dump({"name": safe, "items": normalise_all(items)}, handle,
-                  indent=2)
+        json.dump(payload, handle, indent=2, ensure_ascii=False)
+        handle.write("\n")
     return safe
 
 

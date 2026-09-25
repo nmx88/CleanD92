@@ -2105,12 +2105,14 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/preset":
             name = str(payload.get("name") or "")
             try:
-                items = layout.load_preset(HERE, name)
+                items, scene = layout.load_preset(HERE, name)
             except Exception as exc:
                 self._json({"error": "cannot load preset: %s" % exc}, 400)
                 return
-            self._json({"state": apply_patch({"items": items,
-                                              "preset": name})})
+            patch = {"items": items, "preset": name}
+            if scene:
+                patch.update(scene)
+            self._json({"state": apply_patch(patch)})
 
         else:
             self._json({"error": "not found"}, 404)
