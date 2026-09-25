@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Sparse package for CleanD92. Gives the unpackaged exe an identity so
+  UserNotificationListener can read toasts. Register with
+  tools/register_identity.ps1 (Developer Mode recommended).
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+  xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap uap3 uap10 rescap"
+  uap10:AllowExternalContent="true">
+  <Identity
+    Name="nmx88.CleanD92"
+    Publisher="CN=CleanD92 Local"
+    Version="1.7.0.0" />
+  <Properties>
+    <DisplayName>CleanD92</DisplayName>
+    <PublisherDisplayName>nmx88</PublisherDisplayName>
+    <Description>Driver-free StreamDock D92 control app</Description>
+    <Logo>StoreLogo.png</Logo>
+  </Properties>
+  <Resources>
+    <Resource Language="en-US" />
+  </Resources>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
+  </Dependencies>
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+    <uap3:Capability Name="userNotificationListener" />
+  </Capabilities>
+  <Applications>
+    <Application Id="CleanD92"
+                 Executable="CleanD92.exe"
+                 EntryPoint="Windows.FullTrustApplication"
+                 uap10:TrustLevel="mediumIL"
+                 uap10:RuntimeBehavior="win32App">
+      <uap:VisualElements
+        DisplayName="CleanD92"
+        Description="CleanD92 panel app"
+        BackgroundColor="transparent"
+        Square150x150Logo="StoreLogo.png"
+        Square44x44Logo="StoreLogo.png" />
+    </Application>
+  </Applications>
+</Package>

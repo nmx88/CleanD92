@@ -47,6 +47,7 @@ dropouts -- 350 ms is the value verified safe upstream.
 
 import io
 import json
+import math
 import os
 import random
 import re
@@ -70,7 +71,7 @@ MEDIA_DIR = os.path.join(HERE, "media")
 SETTINGS_PATH = os.path.join(HERE, "settings.json")
 # Survives restart. Kept small on purpose -- layouts already live in presets/.
 SETTINGS_KEYS = ("weather_place", "weather_country", "weather_units",
-                 "weather_lang")
+                 "weather_lang", "notify_mirror")
 EXTENSIONS = (".gif", ".png", ".jpg", ".jpeg", ".bmp", ".webp")
 # Soft ceiling for a drop / import. Longer GIFs are fine once they live in
 # media/; this only stops someone dragging a multi-GB file onto the window.
@@ -116,6 +117,8 @@ state = {
     # file or drag a layout about without the panel changing, and without
     # letting the OUT endpoint go idle -- which is what blacks it out.
     "hold": False,
+    # Toast mirroring needs sparse package identity + user consent.
+    "notify_mirror": False,
 }
 
 runtime = {
@@ -1108,6 +1111,7 @@ def start_weather_poller():
 NOWPLAYING_POLL = 3.0       # idle gap after a fetch when an item is on canvas
 NOWPLAYING_TIMEOUT = 14.0   # hard cap on the helper process
 NOWPLAYING_THUMB_SIDE = 96  # square JPEG prepared off the render thread
+NOWPLAYING_IDLE_HIDE = 5.0  # seconds of empty session before the strip vanishes
 
 _nowplaying_cache = {
     "t": 0.0,
@@ -1115,27 +1119,14 @@ _nowplaying_cache = {
     "artist": "",
     "album": "",
     "status": "none",
+    "app": "",
     "thumb": None,          # small JPEG bytes, or None
     "error": "",
+    "idle_since": 0.0,      # monotonic when title went empty; 0 = active
+    "sessions": (),         # ((app, status, title, artist, album), ...)
 }
 _nowplaying_lock = threading.Lock()
 _nowplaying_started = False
-
-
-def _nowplaying_script():
-    """Resolve tools/nowplaying.ps1 for source and frozen runs."""
-    candidates = []
-    if getattr(sys, "frozen", False):
-        meipass = getattr(sys, "_MEIPASS", None)
-        if meipass:
-            candidates.append(os.path.join(meipass, "tools", "nowplaying.ps1"))
-        candidates.append(os.path.join(HERE, "tools", "nowplaying.ps1"))
-    else:
-        candidates.append(os.path.join(HERE, "tools", "nowplaying.ps1"))
-    for path in candidates:
-        if os.path.isfile(path):
-            return path
-    return None
 
 
 def _prepare_nowplaying_thumb(raw):
@@ -1156,18 +1147,22 @@ def _prepare_nowplaying_thumb(raw):
         return None
 
 
-def fetch_nowplaying():
-    """Run the helper once and update the cache. Blocking; off render thread."""
+def fetch_nowplaying(prefer_app=""):
+    """Run the helper once and update the cache. Blocking; off render thread.
+
+    prefer_app: optional AUMID substring from a nowplaying item's text field."""
     import base64
     import subprocess
 
     script = _nowplaying_script()
     if not script:
         with _nowplaying_lock:
+            now = time.monotonic()
+            idle = _nowplaying_cache.get("idle_since") or now
             _nowplaying_cache.update({
-                "t": time.monotonic(), "error": "helper missing",
+                "t": now, "error": "helper missing",
                 "status": "none", "title": "", "artist": "", "album": "",
-                "thumb": None,
+                "app": "", "thumb": None, "idle_since": idle, "sessions": (),
             })
         return
 
@@ -1197,20 +1192,50 @@ def fetch_nowplaying():
         return
 
     fields = {}
+    sessions = []
     for line in text.splitlines():
         if "=" not in line:
             continue
         key, _, value = line.partition("=")
-        fields[key.strip().upper()] = value.strip()
+        key = key.strip().upper()
+        value = value.strip()
+        if key == "SESSION":
+            parts = (value.split("|") + ["", "", "", "", ""])[:5]
+            sessions.append(tuple(p.strip() for p in parts))
+        else:
+            fields[key] = value
 
+    prefer = (prefer_app or "").strip().lower()
     title = fields.get("TITLE", "")
     artist = fields.get("ARTIST", "")
     album = fields.get("ALBUM", "")
     status = (fields.get("STATUS") or "none").strip()
+    app = fields.get("APP", "")
     error = fields.get("ERROR", "")
+
+    # Optional AUMID filter: re-pick from SESSION lines when the helper's
+    # default choice does not match the item's text override.
+    if prefer and sessions:
+        ranked = []
+        for row in sessions:
+            sapp, sstatus, stitle, sartist, salbum = row
+            if prefer not in sapp.lower():
+                continue
+            score = 0
+            if sstatus.lower() in ("playing", "opened"):
+                score += 2
+            if stitle:
+                score += 1
+            ranked.append((score, sapp, sstatus, stitle, sartist, salbum))
+        if ranked:
+            ranked.sort(key=lambda r: -r[0])
+            _, app, status, title, artist, album = ranked[0]
+
     thumb = None
     b64 = fields.get("THUMB_B64") or ""
-    if b64:
+    # Only keep the helper thumb when we did not override the pick.
+    keep_thumb = not prefer or prefer in (app or "").lower()
+    if keep_thumb and b64:
         try:
             raw = base64.b64decode(b64, validate=False)
             if 64 < len(raw) < 4 * 1024 * 1024:
@@ -1219,22 +1244,30 @@ def fetch_nowplaying():
             thumb = None
 
     with _nowplaying_lock:
-        # Keep the previous art when metadata matches but the thumb read
-        # failed -- GSMTC thumbnails are flaky and flicker is worse than stale.
         prev = _nowplaying_cache
         if (thumb is None
                 and title and title == prev.get("title")
                 and artist == prev.get("artist")
                 and prev.get("thumb")):
             thumb = prev["thumb"]
+        now = time.monotonic()
+        idle = (not (title or "").strip()
+                or (status or "").lower() in ("none", ""))
+        if idle:
+            idle_since = prev.get("idle_since") or now
+        else:
+            idle_since = 0.0
         _nowplaying_cache.update({
-            "t": time.monotonic(),
+            "t": now,
             "title": title[:80],
             "artist": artist[:80],
             "album": album[:80],
             "status": status[:40],
+            "app": app[:120],
             "thumb": thumb,
             "error": error[:80],
+            "idle_since": idle_since,
+            "sessions": tuple(sessions),
         })
 
 
@@ -1246,9 +1279,12 @@ def nowplaying_snapshot():
             "artist": _nowplaying_cache["artist"],
             "album": _nowplaying_cache["album"],
             "status": _nowplaying_cache["status"],
+            "app": _nowplaying_cache.get("app", ""),
             "thumb": _nowplaying_cache["thumb"],
             "error": _nowplaying_cache["error"],
             "t": _nowplaying_cache["t"],
+            "idle_since": _nowplaying_cache.get("idle_since", 0.0),
+            "sessions": _nowplaying_cache.get("sessions", ()),
         }
 
 
@@ -1259,17 +1295,25 @@ def nowplaying_poller():
             stopping = runtime["stop"]
         if stopping:
             return
-        if any(i.get("type") == "nowplaying" for i in items):
-            fetch_nowplaying()
+        np_items = [i for i in items if i.get("type") == "nowplaying"]
+        if np_items:
+            # First non-empty text field is an AUMID substring filter.
+            prefer = ""
+            for item in np_items:
+                prefer = (item.get("text") or "").strip()
+                if prefer:
+                    break
+            fetch_nowplaying(prefer_app=prefer)
         else:
-            # Drop art when the item is gone so a removed strip does not
-            # keep a multi-frame JPEG resident for the rest of the session.
             with _nowplaying_lock:
-                if _nowplaying_cache.get("thumb") or _nowplaying_cache.get("title"):
+                if (_nowplaying_cache.get("thumb")
+                        or _nowplaying_cache.get("title")
+                        or _nowplaying_cache.get("idle_since")):
                     _nowplaying_cache.update({
                         "title": "", "artist": "", "album": "",
-                        "status": "none", "thumb": None, "error": "",
-                        "t": 0.0,
+                        "status": "none", "app": "", "thumb": None,
+                        "error": "", "t": 0.0, "idle_since": 0.0,
+                        "sessions": (),
                     })
         time.sleep(NOWPLAYING_POLL)
 
@@ -1280,6 +1324,355 @@ def start_nowplaying_poller():
         return
     _nowplaying_started = True
     threading.Thread(target=nowplaying_poller, daemon=True).start()
+
+
+# ----------------------------------------------------------------- volume
+# Default render endpoint via pycaw (Core Audio). Poller owns the COM calls;
+# metric_values only reads the cache. No device writes here.
+
+VOLUME_POLL = 1.0
+
+_volume_cache = {"t": 0.0, "percent": None, "muted": False, "error": ""}
+_volume_lock = threading.Lock()
+_volume_started = False
+
+
+def fetch_volume():
+    try:
+        from pycaw.pycaw import AudioUtilities
+        device = AudioUtilities.GetSpeakers()
+        endpoint = device.EndpointVolume
+        percent = max(0, min(100, int(round(
+            endpoint.GetMasterVolumeLevelScalar() * 100))))
+        muted = bool(endpoint.GetMute())
+        with _volume_lock:
+            _volume_cache.update({
+                "t": time.monotonic(), "percent": percent,
+                "muted": muted, "error": "",
+            })
+    except Exception as exc:
+        with _volume_lock:
+            _volume_cache.update({
+                "t": time.monotonic(), "error": str(exc)[:60],
+            })
+
+
+def volume_snapshot():
+    with _volume_lock:
+        return {
+            "percent": _volume_cache["percent"],
+            "muted": _volume_cache["muted"],
+            "error": _volume_cache["error"],
+            "t": _volume_cache["t"],
+        }
+
+
+def volume_poller():
+    while True:
+        with state_lock:
+            items = list(state.get("items") or [])
+            stopping = runtime["stop"]
+        if stopping:
+            return
+        wanted = any(
+            i.get("type") == "stat"
+            and i.get("source") in ("volume", "volume_mute")
+            for i in items)
+        if wanted:
+            fetch_volume()
+        time.sleep(VOLUME_POLL)
+
+
+def start_volume_poller():
+    global _volume_started
+    if _volume_started:
+        return
+    _volume_started = True
+    threading.Thread(target=volume_poller, daemon=True).start()
+
+
+# ------------------------------------------------------------------- timer
+# Live end times keyed by item id. Not persisted in presets -- Reset in the
+# editor (or adding a new timer) starts a fresh countdown.
+
+_timer_ends = {}          # item_id -> end monotonic
+_timer_lock = threading.Lock()
+
+
+def timer_arm(item_id, duration_seconds):
+    with _timer_lock:
+        _timer_ends[item_id] = time.monotonic() + max(1, int(duration_seconds))
+
+
+def timer_clear(item_id=None):
+    with _timer_lock:
+        if item_id is None:
+            _timer_ends.clear()
+        else:
+            _timer_ends.pop(item_id, None)
+
+
+def timer_display_map(items):
+    """{item_id: {display, remaining}} for every timer item on the canvas."""
+    now = time.monotonic()
+    result = {}
+    with _timer_lock:
+        ends = dict(_timer_ends)
+    live_ids = set()
+    for item in items or []:
+        if item.get("type") != "timer":
+            continue
+        iid = item["id"]
+        live_ids.add(iid)
+        seconds = layout.parse_timer_duration(item.get("format"))
+        end = ends.get(iid)
+        if end is None:
+            # First sighting: arm from now so a loaded preset starts ticking.
+            end = now + seconds
+            with _timer_lock:
+                _timer_ends[iid] = end
+        remaining = int(math.ceil(end - now))
+        if remaining <= 0:
+            result[iid] = {"display": "done", "remaining": 0}
+        else:
+            result[iid] = {
+                "display": "%d:%02d" % (remaining // 60, remaining % 60),
+                "remaining": remaining,
+            }
+    # Drop ends for timers removed from the layout.
+    stale = [k for k in ends if k not in live_ids]
+    if stale:
+        with _timer_lock:
+            for k in stale:
+                _timer_ends.pop(k, None)
+    return result
+
+
+# ----------------------------------------------------------- notifications
+# Windows toast mirroring via UserNotificationListener. Requires sparse
+# package identity (packaging/AppxManifest.xml + register_identity.ps1) and
+# user consent. Opt-in via state["notify_mirror"].
+
+NOTIFY_POLL = 4.0
+NOTIFY_TIMEOUT = 14.0
+NOTIFY_DWELL = 30.0       # seconds a toast stays on the strip once seen
+NOTIFY_ALLOW = (
+    "viber", "telegram", "outlook", "microsoft.outlook", "hxmail",
+    "mail", "chrome", "msedge", "googlechrome", "firefox", "gmail",
+)
+
+_notify_cache = {
+    "t": 0.0,
+    "access": "",
+    "error": "",
+    "toasts": [],           # [{id, aumid, app, title, body, seen}]
+}
+_notify_lock = threading.Lock()
+_notify_started = False
+
+
+def _tool_script(*parts):
+    """Resolve a tools/… script for source and frozen runs."""
+    rel = os.path.join(*parts)
+    candidates = []
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            candidates.append(os.path.join(meipass, rel))
+        candidates.append(os.path.join(HERE, rel))
+    else:
+        candidates.append(os.path.join(HERE, rel))
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def _nowplaying_script():
+    return _tool_script("tools", "nowplaying.ps1")
+
+
+def register_notify_identity():
+    """Ensure packaging/ sits beside the app, then register the sparse package."""
+    import shutil
+    import subprocess
+
+    script = _tool_script("tools", "register_identity.ps1")
+    if not script:
+        return False, "register script missing"
+
+    dest_dir = os.path.join(HERE, "packaging")
+    os.makedirs(dest_dir, exist_ok=True)
+    src_manifest = None
+    for candidate in (
+            os.path.join(HERE, "packaging", "AppxManifest.xml"),
+            _tool_script("packaging", "AppxManifest.xml"),
+    ):
+        if candidate and os.path.isfile(candidate):
+            src_manifest = candidate
+            break
+    if not src_manifest:
+        return False, "AppxManifest.xml missing"
+    dest_manifest = os.path.join(dest_dir, "AppxManifest.xml")
+    if os.path.abspath(src_manifest) != os.path.abspath(dest_manifest):
+        shutil.copy2(src_manifest, dest_manifest)
+
+    creationflags = 0
+    if sys.platform == "win32":
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    cmd = [
+        "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+        "-File", script, "-AppDir", HERE,
+    ]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, timeout=60, check=False,
+            creationflags=creationflags)
+        text = (proc.stdout or b"").decode("utf-8", "replace")
+    except Exception as exc:
+        return False, str(exc)[:120]
+    if "STATUS=registered" in text:
+        return True, "registered"
+    err = ""
+    for line in text.splitlines():
+        if line.startswith("ERROR="):
+            err = line[6:]
+            break
+    return False, err or text[:200] or "register failed"
+
+
+def fetch_notifications():
+    """Poll toasts. Blocking; off render thread."""
+    import subprocess
+    script = _tool_script("tools", "notifications.ps1")
+    if not script:
+        with _notify_lock:
+            _notify_cache.update({
+                "t": time.monotonic(), "error": "helper missing",
+            })
+        return
+    creationflags = 0
+    if sys.platform == "win32":
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    cmd = [
+        "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+        "-File", script,
+    ]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, timeout=NOTIFY_TIMEOUT,
+            check=False, creationflags=creationflags)
+        text = (proc.stdout or b"").decode("utf-8", "replace")
+    except subprocess.TimeoutExpired:
+        with _notify_lock:
+            _notify_cache.update({"t": time.monotonic(), "error": "timed out"})
+        return
+    except OSError as exc:
+        with _notify_lock:
+            _notify_cache.update({
+                "t": time.monotonic(), "error": str(exc)[:60],
+            })
+        return
+
+    access = ""
+    error = ""
+    fresh = []
+    now = time.monotonic()
+    for line in text.splitlines():
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip().upper()
+        value = value.strip()
+        if key == "ACCESS":
+            access = value
+        elif key == "ERROR":
+            error = value
+        elif key == "TOAST":
+            parts = (value.split("|") + ["", "", "", "", ""])[:5]
+            tid, aumid, app, title, body = [p.strip() for p in parts]
+            blob = (" ".join((aumid, app, title, body))).lower()
+            if not any(token in blob for token in NOTIFY_ALLOW):
+                continue
+            if "cleand92" in aumid.lower() or "cleand92" in app.lower():
+                continue
+            fresh.append({
+                "id": tid[:80],
+                "aumid": aumid[:120],
+                "app": (app or aumid.split(".")[-1] or "App")[:40],
+                "title": title[:80],
+                "body": body[:120],
+            })
+
+    with _notify_lock:
+        prev = {t["id"]: t for t in _notify_cache.get("toasts") or []}
+        merged = []
+        for row in fresh:
+            old = prev.get(row["id"])
+            row["seen"] = old["seen"] if old else now
+            merged.append(row)
+        _notify_cache.update({
+            "t": now,
+            "access": access,
+            "error": error,
+            "toasts": merged,
+        })
+
+
+def notify_snapshot():
+    """Newest allowed toast still within dwell, or None. Never raises."""
+    now = time.monotonic()
+    with _notify_lock:
+        toasts = list(_notify_cache.get("toasts") or [])
+        access = _notify_cache.get("access") or ""
+        error = _notify_cache.get("error") or ""
+    if access and access != "Allowed":
+        return {
+            "app": "Notify",
+            "title": "access needed",
+            "body": "Allow notification access in Windows Settings",
+        }
+    if error and not toasts:
+        low = error.lower()
+        if "identity" in low or "not registered" in low or "class not" in low:
+            return {
+                "app": "Notify",
+                "title": "identity needed",
+                "body": "Enable mirroring and register the sparse package",
+            }
+        return None
+    live = [t for t in toasts
+            if now - t.get("seen", now) <= NOTIFY_DWELL
+            and (t.get("title") or t.get("body"))]
+    if not live:
+        return None
+    top = live[0]
+    return {
+        "app": top.get("app") or "App",
+        "title": top.get("title") or "",
+        "body": top.get("body") or "",
+    }
+
+
+def notify_poller():
+    while True:
+        with state_lock:
+            wanted = state.get("notify_mirror")
+            items = list(state.get("items") or [])
+            stopping = runtime["stop"]
+        if stopping:
+            return
+        if wanted and any(i.get("type") == "notify" for i in items):
+            fetch_notifications()
+        time.sleep(NOTIFY_POLL)
+
+
+def start_notify_poller():
+    global _notify_started
+    if _notify_started:
+        return
+    _notify_started = True
+    threading.Thread(target=notify_poller, daemon=True).start()
 
 
 def load_settings():
@@ -1311,6 +1704,8 @@ def load_settings():
         lang = data.get("weather_lang")
         if lang in ("el", "en"):
             state["weather_lang"] = lang
+        if "notify_mirror" in data:
+            state["notify_mirror"] = bool(data.get("notify_mirror"))
 
 
 def save_settings():
@@ -1369,6 +1764,9 @@ def available_sources():
         "net_down": "Network down",
         "net_up": "Network up",
         "uptime": "Uptime",
+        "volume": "Speaker volume",
+        "volume_mute": "Speaker mute",
+        "battery": "Battery",
     }
     for letter in drive_letters():
         sources["disk_%s" % letter.lower()] = "Disk %s: used" % letter
@@ -1429,6 +1827,34 @@ def metric_values(cfg, filename=None):
     if down is not None:
         values["net_down"] = ("DOWN", human_rate(down))
         values["net_up"] = ("UP", human_rate(up))
+
+    vol = volume_snapshot()
+    if vol.get("percent") is not None:
+        if vol.get("muted"):
+            values["volume"] = ("VOL", "MUTE")
+            values["volume_mute"] = ("MUTE", "on")
+        else:
+            values["volume"] = ("VOL", "%d%%" % vol["percent"])
+            values["volume_mute"] = ("MUTE", "off")
+    elif vol.get("error"):
+        values["volume"] = ("VOL", "n/a")
+        values["volume_mute"] = ("MUTE", "n/a")
+    else:
+        values["volume"] = ("VOL", "\u2026")
+        values["volume_mute"] = ("MUTE", "\u2026")
+
+    try:
+        bat = psutil.sensors_battery()
+    except Exception:
+        bat = None
+    if bat is None:
+        values["battery"] = ("BAT", "n/a")
+    else:
+        pct = int(round(bat.percent))
+        if bat.power_plugged:
+            values["battery"] = ("BAT", "%d%% AC" % pct)
+        else:
+            values["battery"] = ("BAT", "%d%%" % pct)
 
     if cfg["show_gpu"]:
         from_lhm, _, _ = lhm_values()
@@ -1526,10 +1952,17 @@ def metric_values(cfg, filename=None):
     if any(i.get("type") == "nowplaying" for i in (cfg.get("items") or [])):
         snap = nowplaying_snapshot()
         status = (snap.get("status") or "").lower()
+        title = (snap.get("title") or "").strip()
+        idle_since = snap.get("idle_since") or 0.0
         if not snap.get("t"):
             values["nowplaying"] = {
                 "title": "", "artist": "", "status": "reading", "thumb": None}
-        elif status in ("none",) and not (snap.get("title") or "").strip():
+        elif ((not title or status in ("none", ""))
+              and idle_since
+              and (time.monotonic() - idle_since) >= NOWPLAYING_IDLE_HIDE):
+            # Strip gone after a short "Nothing playing" grace period.
+            values["nowplaying"] = None
+        elif not title or status in ("none", ""):
             values["nowplaying"] = {
                 "title": "", "artist": "", "status": "none", "thumb": None}
         else:
@@ -1539,6 +1972,16 @@ def metric_values(cfg, filename=None):
                 "status": snap.get("status") or "",
                 "thumb": snap.get("thumb"),
             }
+
+    timer_items = [i for i in (cfg.get("items") or [])
+                   if i.get("type") == "timer"]
+    if timer_items:
+        values["timer_map"] = timer_display_map(timer_items)
+
+    if any(i.get("type") == "notify" for i in (cfg.get("items") or [])):
+        note = notify_snapshot()
+        if note:
+            values["notify"] = note
     return values
 
 
@@ -1661,6 +2104,8 @@ def render_loop(panel):
     start_lhm_poller()
     start_weather_poller()
     start_nowplaying_poller()
+    start_volume_poller()
+    start_notify_poller()
     runtime["status"] = "streaming"
 
     while True:
@@ -2246,6 +2691,9 @@ def apply_patch(patch):
                 state["lhm_url"] = value.strip()[:300]
             elif key == "show_gpu":
                 state["show_gpu"] = bool(value)
+            elif key == "notify_mirror":
+                state["notify_mirror"] = bool(value)
+                weather_dirty = True  # reuse settings flush below
             elif key == "weather_place" and isinstance(value, str):
                 state["weather_place"] = value.strip()[:80]
                 _weather_invalidate = True

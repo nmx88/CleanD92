@@ -4,8 +4,9 @@ A driver-free control app for the **StreamDock D92** — the 1920×464 USB
 monitoring panel sold as MiraBox D92 and under a few other names. Its
 firmware identifies itself as `HOTSPOTEKUSB HID DEMO`, USB ID `5548:1011`.
 
-CleanD92 talks to the panel over its own HID protocol and **installs nothing
-on your system**: no driver, no service, no administrator rights.
+CleanD92 talks to the panel over its own HID protocol and **installs no
+driver or service**. Optional toast mirroring registers a sparse package
+identity once (see Notifications below); everything else is drop-and-run.
 
 ![CleanD92 window: live preview on the left, weather and GPU sensor settings below](docs/screenshot.png)
 
@@ -41,7 +42,14 @@ If your PC is rebooting in a loop, see
 - **World clocks** — another city's local time and offset from yours.
 - **Now playing** — title, artist and a small album thumbnail from the
   Windows media session on this PC (Spotify, browser, Groove, …). Phone or
-  watch players are not visible here.
+  watch players are not visible here. Idle sessions hide after a few seconds;
+  long titles marquee.
+- **Volume and battery** — speaker level / mute and laptop battery readouts.
+- **Timer** — countdown item (`25m`, `90s`, …) with Reset in the editor.
+- **Notifications** — optional mirroring of Windows toasts (Viber, Telegram,
+  Outlook, Mail, browser Gmail). Needs a one-time sparse package identity and
+  notification access; not a driver. Enable under Notifications in the window.
+- **Preset hotkeys** — Ctrl+1…9 loads the Nth preset while the window is focused.
 - **Image / GIF** — a single still or animated file.
 - **Slideshow** — every file in the `media` folder in turn, with a dwell time
   and optional shuffle. Animated GIFs keep animating during their slot.
@@ -138,13 +146,18 @@ use `http://127.0.0.1:8092`.
    second city (Now / 1 day only).
 4. **Now playing** — add a Now playing item while Spotify (or any Windows
    media session) is active; album art appears when the player supplies it.
-5. **Save a scene** — **Save as…** under Layout. Next time, pick it from the
+   Stops showing a few seconds after playback ends.
+5. **Notifications** — add a Notification item, tick Mirror Windows toasts,
+   and allow access when Windows asks. Register sparse identity if prompted
+   (Developer Mode may be required).
+6. **Save a scene** — **Save as…** under Layout. Next time, pick it from the
    preset list to restore layout **and** mode / quality / interval / weather.
-   Built-ins (Wide dashboard, …) are layout-only.
-6. **Hold** — tick Hold while you edit; the panel stays on its last frame.
+   Built-ins (Wide dashboard, …) are layout-only. Ctrl+1…9 jumps to presets
+   by list order while the window is focused.
+7. **Hold** — tick Hold while you edit; the panel stays on its last frame.
    **Apply now** pushes one fresh frame. Hold itself is never saved in a
    preset.
-7. **Phone** — run with `--web` (or the exe equivalent if you launch that way
+8. **Phone** — run with `--web` (or the exe equivalent if you launch that way
    from a shortcut). Open the **Phone UI** URL shown under Panel on a phone
    on the same Wi-Fi.
 

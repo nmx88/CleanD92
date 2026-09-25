@@ -24,13 +24,16 @@ analysis = Analysis(
     # load it when frozen (the EXE version resource is not a filesystem file).
     datas=[
         ("icon.ico", "."),
-        # GSMTC helper (stock PowerShell). Unpacked under _MEIPASS/tools/
-        # when frozen -- see d92_panel._nowplaying_script.
         ("tools/nowplaying.ps1", "tools"),
+        ("tools/notifications.ps1", "tools"),
+        ("tools/register_identity.ps1", "tools"),
+        ("packaging/AppxManifest.xml", "packaging"),
     ],
     hiddenimports=[
         "hid",
         "psutil",
+        "pycaw",
+        "comtypes",
         "PIL.ImageTk",          # pulled in dynamically by the preview canvas
         "windnd",               # Windows drag-and-drop onto the preview
         "tzdata",               # zoneinfo database on Windows

@@ -226,6 +226,9 @@ that is wiped on exit, so `media/` and `presets/` would vanish every run.
 - No plugin interface for other devices in the family, on purpose: an
   abstraction designed with one device on the bench puts its seams in the
   wrong places. See "Adding another device" in the README.
+- Toast mirroring is the only optional identity path: a sparse Appx package
+  (`packaging/AppxManifest.xml`) so `UserNotificationListener` can run. It
+  is not a driver or service; everything else stays unpackaged.
 
 ---
 
@@ -235,7 +238,7 @@ that is wiped on exit, so `media/` and `presets/` would vanish every run.
   invariant above should be defended by a comment at the place it is enforced.
 - No new runtime dependencies without a reason that survives "this has to be
   one portable exe". Current set: `hidapi`, `pillow`, `psutil`, `pystray`,
-  `windnd`, `tzdata`, plus stdlib tkinter.
+  `windnd`, `tzdata`, `pycaw` (+ `comtypes`), plus stdlib tkinter.
 - UI colours are explicit. The window uses classic `tk.Radiobutton` and
   `tk.Checkbutton` rather than `ttk` for anything with an indicator, because
   the clam theme paints its own hover background and produced white-on-white.

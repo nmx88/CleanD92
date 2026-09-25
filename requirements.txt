@@ -5,3 +5,5 @@ psutil>=5.9
 windnd>=1.0.7          # Windows file drop onto the preview canvas
 tzdata>=2024.1         # IANA zones for world clocks (zoneinfo needs this on Windows)
 pystray>=0.19          # minimise to the notification area (tray)
+pycaw>=20240210        # default endpoint volume / mute for layout readouts
+comtypes>=1.4          # required by pycaw

@@ -101,6 +101,10 @@ class PanelApp:
         # Minimize (taskbar button) goes to the notification area; the X still
         # quits. The render thread keeps pushing frames while we are hidden.
         root.bind("<Unmap>", self._on_unmap)
+        # Ctrl+1..9 load presets by list order while this window is focused.
+        for index in range(1, 10):
+            root.bind("<Control-Key-%d>" % index,
+                      lambda e, n=index: self._hotkey_preset(n))
 
         self._style()
         self._build()
@@ -260,6 +264,7 @@ class PanelApp:
         self._items_group(holder)
         self._weather_group(holder)
         self._gpu_group(holder)
+        self._notify_group(holder)
         self._panel(holder)
 
     # -- control groups ---------------------------------------------------
@@ -474,6 +479,10 @@ class PanelApp:
             swatch.pack(side="left")
             self.item_swatches[key] = swatch
 
+        self.prop_timer = ttk.Frame(self.fields_host)
+        ttk.Button(self.prop_timer, text="Reset timer",
+                   command=self.reset_timer).pack(anchor="w")
+
         nudge = ttk.Frame(props)
         nudge.pack(fill="x", pady=(8, 0))
         for label, dx, dy in (("\u2190", -1, 0), ("\u2192", 1, 0),
@@ -565,6 +574,52 @@ class PanelApp:
                        "from user mode without a kernel driver, and this app "
                        "installs none."
                   ).pack(anchor="w", pady=(6, 0))
+
+    def _notify_group(self, parent):
+        group = ttk.Labelframe(parent, text="Notifications", padding=10)
+        group.pack(fill="x", pady=(0, 10))
+        self.notify_mirror = tk.BooleanVar()
+        tk.Checkbutton(
+            group, text="Mirror Windows toasts on the panel",
+            variable=self.notify_mirror,
+            command=self._toggle_notify_mirror,
+            **self.WIDGET_COLOURS).pack(fill="x", anchor="w")
+        ttk.Button(group, text="Register sparse identity",
+                   command=self.register_notify_identity
+                   ).pack(fill="x", pady=(6, 0))
+        ttk.Label(
+            group, wraplength=380, style="Dim.TLabel",
+            text="Add a Notification item under Items. Mirroring needs a "
+                 "one-time sparse package identity (not a driver) and "
+                 "Windows notification access. Filters Viber, Telegram, "
+                 "Outlook, Mail, and browser Gmail toasts. Enable Developer "
+                 "Mode if registration fails."
+        ).pack(anchor="w", pady=(6, 0))
+
+    def _toggle_notify_mirror(self):
+        wanted = bool(self.notify_mirror.get())
+        self.push(notify_mirror=wanted)
+        if wanted:
+            self.register_notify_identity(quiet=True)
+
+    def register_notify_identity(self, quiet=False):
+        ok, message = core.register_notify_identity()
+        if quiet and ok:
+            return
+        from tkinter import messagebox
+        if ok:
+            messagebox.showinfo(
+                app_title(),
+                "Sparse identity registered. Windows may ask for "
+                "notification access the next time toasts are polled.",
+                parent=self.root)
+        else:
+            messagebox.showwarning(
+                app_title(),
+                "Could not register identity:\n%s\n\n"
+                "Enable Developer Mode under Settings \u2192 System \u2192 "
+                "For developers, then try again." % (message or "unknown"),
+                parent=self.root)
 
     def _panel(self, parent):
         group = ttk.Labelframe(parent, text="Panel", padding=10)
@@ -721,6 +776,10 @@ class PanelApp:
         for item in items:
             if item["id"] == self.selected:
                 item.update(changes)
+                if item.get("type") == "timer" and "format" in changes:
+                    core.timer_arm(
+                        item["id"],
+                        layout.parse_timer_duration(item.get("format")))
                 break
         else:
             return
@@ -789,12 +848,44 @@ class PanelApp:
             fresh["color"] = "#ebe6d5"
             fresh["label_color"] = "#8a9bb0"
             fresh["show_label"] = True
+        if fresh["type"] == "timer":
+            fresh["text"] = "Focus"
+            fresh["format"] = "25m"
+            fresh["size"] = 0.18
+            fresh["color"] = "#ebe6d5"
+            fresh["label_color"] = "#8a9bb0"
+            fresh["show_label"] = True
+        if fresh["type"] == "notify":
+            fresh["size"] = 0.14
+            fresh["width"] = 0.55
+            fresh["color"] = "#ebe6d5"
+            fresh["label_color"] = "#8a9bb0"
+            fresh["show_label"] = True
         items.append(fresh)
         core.apply_patch({"items": items})
         self.selected = fresh["id"]
         self.pull()
         if fresh["type"] == "weather":
             self.refresh_weather()
+        if fresh["type"] == "timer":
+            core.timer_arm(
+                fresh["id"],
+                layout.parse_timer_duration(fresh["format"]))
+
+    def reset_timer(self):
+        item = self.selected_item()
+        if not item or item.get("type") != "timer":
+            return
+        core.timer_arm(
+            item["id"], layout.parse_timer_duration(item.get("format")))
+
+    def _hotkey_preset(self, number):
+        """Ctrl+N loads the Nth preset name (1-based) from the list."""
+        names = layout.list_presets(core.HERE)
+        if number < 1 or number > len(names):
+            return
+        self.preset.set(names[number - 1])
+        self.load_preset()
 
     def remove_item(self):
         if not self.selected:
@@ -982,7 +1073,7 @@ class PanelApp:
         """Show only the fields that the selected item type uses."""
         for frame in (self.prop_source, self.prop_text, self.prop_format,
                       self.prop_horizon, self.prop_size, self.prop_align,
-                      self.prop_label, self.prop_colours):
+                      self.prop_label, self.prop_colours, self.prop_timer):
             frame.pack_forget()
         if not item_type:
             return
@@ -1008,6 +1099,20 @@ class PanelApp:
                 text="e.g. New York, US or Tokyo. Shows local time and the "
                      "offset from this PC.")
         elif item_type == "nowplaying":
+            order = [self.prop_text, self.prop_size, self.prop_label,
+                     self.prop_colours]
+            self.prop_text_label.configure(text="App filter")
+            self.prop_text_hint.configure(
+                text="Optional AUMID substring (e.g. spotify, msedge). "
+                     "Blank uses the best active session.")
+        elif item_type == "timer":
+            order = [self.prop_text, self.prop_format, self.prop_size,
+                     self.prop_align, self.prop_label, self.prop_colours,
+                     self.prop_timer]
+            self.prop_text_label.configure(text="Label")
+            self.prop_text_hint.configure(
+                text="Duration in Format: 25m, 90s, or seconds.")
+        elif item_type == "notify":
             order = [self.prop_size, self.prop_label, self.prop_colours]
         elif item_type == "text":
             order = [self.prop_text, self.prop_size, self.prop_align,
@@ -1069,7 +1174,22 @@ class PanelApp:
             "small album thumbnail from whatever this PC is playing "
             "(Spotify, browser, Groove, \u2026). It reads the Windows media "
             "session; phone or watch players are not visible here. Tick "
-            "Show label for the artist line.\n"
+            "Show label for the artist line. Idle sessions hide after a few "
+            "seconds.\n"
+            "\n"
+            "Timers and hotkeys\n"
+            "\n"
+            "\u2022 Add a Timer item; Format is the duration (25m, 90s). "
+            "Reset timer restarts it. Ctrl+1\u20139 loads the Nth preset "
+            "while this window is focused.\n"
+            "\n"
+            "Notifications\n"
+            "\n"
+            "\u2022 Add a Notification item and tick Mirror Windows toasts. "
+            "First use registers a sparse package identity (Developer Mode "
+            "may be required) and asks for notification access. Shows "
+            "Viber, Telegram, Outlook, Mail and browser Gmail toasts for "
+            "about 30 seconds.\n"
             "\n"
             "If the panel goes black\n"
             "\n"
@@ -1122,6 +1242,7 @@ class PanelApp:
             self.flip.set(st["flip"])
             self.lhm.set(st["lhm_url"])
             self.show_gpu.set(st["show_gpu"])
+            self.notify_mirror.set(st.get("notify_mirror", False))
             self.hold.set(st["hold"])
             self.slide_shuffle.set(st["slide_shuffle"])
             self.weather_place.set(st.get("weather_place", ""))

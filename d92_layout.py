@@ -42,6 +42,8 @@ ITEM_TYPES = {
     "weather": "Weather",
     "worldclock": "World clock",
     "nowplaying": "Now playing",
+    "timer": "Timer",
+    "notify": "Notification",
 }
 
 # Weather item `format` chooses how much forecast to draw. The place and
@@ -130,6 +132,10 @@ def normalise(item, index=0):
         # city never silently eats a week of bandwidth on the strip.
         if (clean.get("text") or "").strip() and clean["format"] not in ("now", "1"):
             clean["format"] = "now"
+    if clean["type"] == "timer":
+        # format holds the duration; empty falls back to 25 minutes.
+        if not (clean.get("format") or "").strip():
+            clean["format"] = "25m"
     return clean
 
 
@@ -410,6 +416,13 @@ def item_strings(item, values):
     if kind == "nowplaying":
         np = values.get("nowplaying") or {}
         return None, (np.get("title") or "now playing")[:28]
+    if kind == "timer":
+        info = (values.get("timer_map") or {}).get(item["id"]) or {}
+        return (item["text"] if item.get("show_label") else None), (
+            info.get("display") or item.get("format") or "timer")
+    if kind == "notify":
+        note = values.get("notify") or {}
+        return None, (note.get("title") or "notifications")[:28]
     return None, None
 
 
@@ -849,7 +862,10 @@ def render_worldclock(draw, item, info, width, height, short, fitted,
 
 def render_nowplaying(draw, item, info, img, width, height, short, fitted,
                       text_height, translucent=False):
-    """Minimal now-playing strip: optional thumb + title / artist."""
+    """Minimal now-playing strip: optional thumb + title / artist.
+
+    Long titles marquee using wall time so the render loop stays free of I/O.
+    """
     if not info:
         return None
     left = item["x"] * width
@@ -906,8 +922,9 @@ def render_nowplaying(draw, item, info, img, width, height, short, fitted,
     title_px = max(10, item["size"] * short * 0.55)
     artist_px = max(8, item["size"] * short * 0.38)
 
-    def put(x, y, text, px, fill):
-        font = fitted(text, text_span, px)
+    def put(x, y, text, px, fill, max_w=None):
+        limit = max_w if max_w is not None else text_span
+        font = fitted(text, limit, px)
         box = font.getbbox(text) if hasattr(font, "getbbox") else (0, 0, 0, 0)
         drawn = box[2] - box[0]
         if halo:
@@ -916,10 +933,128 @@ def render_nowplaying(draw, item, info, img, width, height, short, fitted,
         draw.text((x, y), text, font=font, fill=fill)
         return x, y, x + drawn, y + text_height(font, text)
 
-    rects.append(put(cursor_x, top, title[:48], title_px, colour))
+    # Marquee: full-size font, scroll when the title is wider than the strip.
+    font_full = fitted(title, 10 ** 6, title_px)
+    try:
+        full_w = font_full.getbbox(title)[2]
+    except Exception:
+        full_w = 0
+    line_h = text_height(font_full, title)
+    if full_w > text_span + 2 and title not in ("Nothing playing", "reading\u2026"):
+        gap = max(24, int(short * 0.08))
+        cycle = max(1, full_w + gap)
+        offset = int(time.monotonic() * 42) % cycle
+        strip_h = max(line_h + 4, int(title_px * 1.35))
+        layer = PILImage.new("RGBA", (int(text_span), strip_h), (0, 0, 0, 0))
+        ldraw = ImageDraw.Draw(layer)
+        fill = colour + (255,)
+        for base in (-offset, -offset + cycle):
+            if halo:
+                for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                    ldraw.text((base + dx, dy), title, font=font_full,
+                               fill=(0, 0, 0, 255))
+            ldraw.text((base, 0), title, font=font_full, fill=fill)
+        img.paste(layer, (int(cursor_x), int(top)), layer)
+        layer.close()
+        rects.append((cursor_x, top, cursor_x + text_span, top + strip_h))
+    else:
+        rects.append(put(cursor_x, top, title[:64], title_px, colour))
+
     if artist and item.get("show_label", True):
         rects.append(put(cursor_x, top + title_px * 0.95, artist[:48],
                          artist_px, label_colour))
+    return (min(r[0] for r in rects), min(r[1] for r in rects),
+            max(r[2] for r in rects), max(r[3] for r in rects))
+
+
+def parse_timer_duration(text):
+    """'25m' / '90s' / '1500' -> seconds. Defaults to 25 minutes."""
+    raw = (text or "").strip().lower() or "25m"
+    try:
+        if raw.endswith("m"):
+            return max(1, int(float(raw[:-1]) * 60))
+        if raw.endswith("s"):
+            return max(1, int(float(raw[:-1])))
+        return max(1, int(float(raw)))
+    except (TypeError, ValueError):
+        return 25 * 60
+
+
+def render_timer(draw, item, info, width, height, short, fitted, text_height,
+                 translucent=False):
+    """Countdown MM:SS (or 'done')."""
+    if not info:
+        return None
+    left = item["x"] * width
+    top = item["y"] * height
+    span = (item["width"] or (1.0 - item["x"])) * width
+    span = max(40.0, span - short * 0.02)
+    colour = hex_rgb(item["color"], (235, 240, 250))
+    label_colour = hex_rgb(item["label_color"], (110, 125, 150))
+    halo = (0, 0, 0) if translucent else None
+    display = info.get("display") or "00:00"
+    label = (item.get("text") or "").strip() or "Timer"
+    value_px = max(12, item["size"] * short * 0.55)
+    label_px = max(8, item["size"] * short * 0.32)
+    rects = []
+
+    def put(y, text, px, fill):
+        font = fitted(text, span, px)
+        box = font.getbbox(text) if hasattr(font, "getbbox") else (0, 0, 0, 0)
+        drawn = box[2] - box[0]
+        x = left
+        if item.get("align") == "center":
+            x = left + (span - drawn) / 2.0
+        elif item.get("align") == "right":
+            x = left + span - drawn
+        if halo:
+            for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                draw.text((x + dx, y + dy), text, font=font, fill=halo)
+        draw.text((x, y), text, font=font, fill=fill)
+        return x, y, x + drawn, y + text_height(font, text)
+
+    if item.get("show_label", True):
+        rects.append(put(top, label[:24], label_px, label_colour))
+        rects.append(put(top + label_px * 0.95, display, value_px, colour))
+    else:
+        rects.append(put(top, display, value_px, colour))
+    return (min(r[0] for r in rects), min(r[1] for r in rects),
+            max(r[2] for r in rects), max(r[3] for r in rects))
+
+
+def render_notify(draw, item, info, width, height, short, fitted, text_height,
+                  translucent=False):
+    """Minimal notification strip: app + title / body."""
+    if not info:
+        return None
+    left = item["x"] * width
+    top = item["y"] * height
+    span = (item["width"] or (1.0 - item["x"])) * width
+    span = max(48.0, span - short * 0.02)
+    colour = hex_rgb(item["color"], (235, 240, 250))
+    label_colour = hex_rgb(item["label_color"], (110, 125, 150))
+    halo = (0, 0, 0) if translucent else None
+    app = (info.get("app") or "").strip() or "Notify"
+    title = (info.get("title") or "").strip() or "Notification"
+    body = (info.get("body") or "").strip()
+    title_px = max(10, item["size"] * short * 0.48)
+    body_px = max(8, item["size"] * short * 0.34)
+    rects = []
+
+    def put(y, text, px, fill):
+        font = fitted(text, span, px)
+        box = font.getbbox(text) if hasattr(font, "getbbox") else (0, 0, 0, 0)
+        drawn = box[2] - box[0]
+        if halo:
+            for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                draw.text((left + dx, y + dy), text, font=font, fill=halo)
+        draw.text((left, y), text, font=font, fill=fill)
+        return left, y, left + drawn, y + text_height(font, text)
+
+    head = ("%s  %s" % (app, title))[:56]
+    rects.append(put(top, head, title_px, colour))
+    if body and item.get("show_label", True):
+        rects.append(put(top + title_px * 0.95, body[:56], body_px, label_colour))
     return (min(r[0] for r in rects), min(r[1] for r in rects),
             max(r[2] for r in rects), max(r[3] for r in rects))
 
@@ -959,6 +1094,23 @@ def render(img, items, values, fitted, text_height, translucent=False):
                 draw, item, values.get("nowplaying"), img,
                 width, height, short, fitted, text_height,
                 translucent=translucent)
+            if box:
+                boxes[item["id"]] = box
+            continue
+
+        if item["type"] == "timer":
+            tmap = values.get("timer_map") or {}
+            box = render_timer(draw, item, tmap.get(item["id"]),
+                               width, height, short, fitted, text_height,
+                               translucent=translucent)
+            if box:
+                boxes[item["id"]] = box
+            continue
+
+        if item["type"] == "notify":
+            box = render_notify(draw, item, values.get("notify"),
+                                width, height, short, fitted, text_height,
+                                translucent=translucent)
             if box:
                 boxes[item["id"]] = box
             continue
